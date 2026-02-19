@@ -24,7 +24,9 @@ const modsNextBtn = document.getElementById("mods-next-page");
 const modsPageInfo = document.getElementById("mods-page-info");
 
 const pnlChart = document.getElementById("cp-pnl-chart");
-const pnlCtx = pnlChart.getContext("2d");
+const pnlCtx = pnlChart ? pnlChart.getContext("2d") : null;
+const pipsChart = document.getElementById("cp-pips-chart");
+const pipsCtx = pipsChart ? pipsChart.getContext("2d") : null;
 
 let currentAssignmentId = null;
 const PERIODS_PAGE_SIZE = 3;
@@ -125,17 +127,20 @@ function renderRegistry(items) {
   }
 }
 
-function drawPnlSeries(series) {
-  const width = pnlChart.width;
-  const height = pnlChart.height;
-  pnlCtx.clearRect(0, 0, width, height);
-  pnlCtx.fillStyle = "rgba(9,15,26,0.95)";
-  pnlCtx.fillRect(0, 0, width, height);
+function drawLineSeries(canvas, ctx, series, opts = {}) {
+  if (!canvas || !ctx) {
+    return;
+  }
+  const width = canvas.width;
+  const height = canvas.height;
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "rgba(9,15,26,0.95)";
+  ctx.fillRect(0, 0, width, height);
   const points = series || [];
   if (points.length < 1) {
-    pnlCtx.fillStyle = "#9fb0cc";
-    pnlCtx.font = "16px Trebuchet MS";
-    pnlCtx.fillText("Sin datos de PnL para este Canal.Preset", 20, 34);
+    ctx.fillStyle = "#9fb0cc";
+    ctx.font = "16px Trebuchet MS";
+    ctx.fillText(String(opts.emptyText || "Sin datos"), 20, 34);
     return;
   }
   const vals = points.map((x) => Number(x.value || 0));
@@ -145,26 +150,40 @@ function drawPnlSeries(series) {
   const pad = 36;
   const plotW = width - pad * 2;
   const plotH = height - pad * 2;
-  pnlCtx.strokeStyle = "rgba(255,255,255,0.22)";
-  pnlCtx.beginPath();
-  pnlCtx.moveTo(pad, height - pad);
-  pnlCtx.lineTo(width - pad, height - pad);
-  pnlCtx.moveTo(pad, pad);
-  pnlCtx.lineTo(pad, height - pad);
-  pnlCtx.stroke();
-  pnlCtx.strokeStyle = "#46d1bf";
-  pnlCtx.lineWidth = 2;
-  pnlCtx.beginPath();
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
+  ctx.beginPath();
+  ctx.moveTo(pad, height - pad);
+  ctx.lineTo(width - pad, height - pad);
+  ctx.moveTo(pad, pad);
+  ctx.lineTo(pad, height - pad);
+  ctx.stroke();
+  ctx.strokeStyle = String(opts.lineColor || "#46d1bf");
+  ctx.lineWidth = 2;
+  ctx.beginPath();
   points.forEach((p, idx) => {
     const x = pad + (idx / Math.max(1, points.length - 1)) * plotW;
     const y = pad + (1 - (Number(p.value || 0) - minV) / range) * plotH;
     if (idx === 0) {
-      pnlCtx.moveTo(x, y);
+      ctx.moveTo(x, y);
     } else {
-      pnlCtx.lineTo(x, y);
+      ctx.lineTo(x, y);
     }
   });
-  pnlCtx.stroke();
+  ctx.stroke();
+}
+
+function drawPnlSeries(series) {
+  drawLineSeries(pnlChart, pnlCtx, series, {
+    lineColor: "#46d1bf",
+    emptyText: "Sin datos de PnL para este Canal.Preset",
+  });
+}
+
+function drawPipsSeries(series) {
+  drawLineSeries(pipsChart, pipsCtx, series, {
+    lineColor: "#f5c542",
+    emptyText: "Sin datos de pips acumulados para este Canal.Preset",
+  });
 }
 
 function renderMeta(detail) {
@@ -401,6 +420,7 @@ async function loadDetail(assignmentId) {
   renderOperations(data.operations || []);
   renderMods(data.modifications || []);
   drawPnlSeries(data.pnl_series || []);
+  drawPipsSeries(data.pips_series || []);
   detailMsg.textContent = `Detalle cargado #${idNum}`;
 }
 
@@ -424,6 +444,7 @@ function initActions() {
     renderOperations([]);
     renderMods([]);
     drawPnlSeries([]);
+    drawPipsSeries([]);
   });
   if (periodsPrevBtn) {
     periodsPrevBtn.addEventListener("click", () => {
@@ -522,6 +543,7 @@ async function init() {
     await loadDetail(pId);
   } else {
     drawPnlSeries([]);
+    drawPipsSeries([]);
   }
 }
 

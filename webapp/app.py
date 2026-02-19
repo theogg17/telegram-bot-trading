@@ -2052,6 +2052,7 @@ def _channel_preset_detail(assignment_id: int, from_ts: str | None = None, to_ts
         operation_items = []
         modification_items = []
         pnl_series = []
+        pips_series = []
         stats = {
             "operations_total": 0,
             "operations_closed": 0,
@@ -2096,6 +2097,7 @@ def _channel_preset_detail(assignment_id: int, from_ts: str | None = None, to_ts
             op_ids = []
             duration_sum = 0
             pnl_acc = 0.0
+            pips_acc = 0.0
             for r in selected_ops:
                 op_ids.append(int(r["id"]))
                 duration = int(r["duration_seconds"]) if r["duration_seconds"] is not None else 0
@@ -2121,7 +2123,9 @@ def _channel_preset_detail(assignment_id: int, from_ts: str | None = None, to_ts
 
                 close_ref = str(r["closed_at"] or r["updated_at"] or r["opened_at"] or "")
                 pnl_acc += float(pnl_usd)
+                pips_acc += float(pnl_pips)
                 pnl_series.append({"ts": close_ref, "value": float(pnl_acc)})
+                pips_series.append({"ts": close_ref, "value": float(pips_acc)})
 
                 operation_items.append(
                     {
@@ -2219,6 +2223,7 @@ def _channel_preset_detail(assignment_id: int, from_ts: str | None = None, to_ts
         "operations": operation_items,
         "modifications": modification_items,
         "pnl_series": pnl_series,
+        "pips_series": pips_series,
         "stats": stats,
     }
 
