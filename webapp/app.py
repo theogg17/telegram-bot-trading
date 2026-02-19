@@ -302,6 +302,10 @@ class AssignmentUpdateRequest(BaseModel):
     is_active: bool = True
 
 
+class ChannelPresetSetActivePayload(BaseModel):
+    is_active: bool
+
+
 class RestartConfigPayload(BaseModel):
     enabled: bool
     interval_minutes: int
@@ -340,6 +344,10 @@ class OperationsManualClosePayload(BaseModel):
     reason: Optional[str] = "Cerrada desde Panel web a mano"
     details: Optional[str] = ""
     close_in_mt5: Optional[bool] = False
+
+
+class WebAuthPasswordPayload(BaseModel):
+    password: str
 
 
 def _db_conn() -> sqlite3.Connection:
@@ -469,6 +477,15 @@ def _is_auth_valid(request: Request) -> bool:
     expected_pass = str(web_auth_credentials.get("password", ""))
     user, pwd = _decode_basic_auth(request.headers.get("authorization", ""))
     return hmac.compare_digest(user, expected_user) and hmac.compare_digest(pwd, expected_pass)
+
+
+def _is_web_password_valid(password: str) -> bool:
+    global web_auth_credentials
+    if web_auth_credentials is None:
+        web_auth_credentials = _load_or_create_web_auth_credentials()
+    expected_pass = str(web_auth_credentials.get("password", ""))
+    provided = str(password or "")
+    return bool(expected_pass) and hmac.compare_digest(provided, expected_pass)
 
 
 def _parse_iso_utc_or_none(value: str | None):
@@ -975,6 +992,34 @@ def _assignment_snapshot_by_id(conn: sqlite3.Connection, assignment_id: int):
     ).fetchone()
 
 
+def _assignment_row_by_id(conn: sqlite3.Connection, assignment_id: int):
+    return conn.execute(
+        """
+        SELECT
+            a.id, a.channel_id, a.config_id, a.mode, a.is_active, a.created_at, a.updated_at,
+            c.name AS channel_name, c.chat_id AS channel_chat_id,
+            p.name AS config_name
+        FROM channel_config_assignments a
+        LEFT JOIN telegram_channels c ON c.id = a.channel_id
+        LEFT JOIN operator_presets p ON p.id = a.config_id
+        WHERE a.id = ?
+        """,
+        (int(assignment_id),),
+    ).fetchone()
+
+
+def _open_operations_count_for_channel_preset_conn(conn: sqlite3.Connection, channel_id: int, config_id: int) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(1) AS c
+        FROM operation_records
+        WHERE channel_id = ? AND preset_id = ? AND status IN ('OPEN','PENDING')
+        """,
+        (int(channel_id), int(config_id)),
+    ).fetchone()
+    return int(row["c"] if row is not None else 0)
+
+
 def _append_channel_preset_event_conn(
     conn: sqlite3.Connection,
     *,
@@ -1475,15 +1520,15 @@ def _normalize_execution_profile_payload(payload: ExecutionProfilePayload) -> di
         raise HTTPException(status_code=400, detail="Profile code is required")
     if not name:
         raise HTTPException(status_code=400, detail="Profile name is required")
-    if code not in ALLOWED_PROFILE_CODES:
-        raise HTTPException(status_code=400, detail="Solo se permiten perfiles SCALP o SWING")
     if len(code) > 24:
         raise HTTPException(status_code=400, detail="Profile code too long (max 24)")
+    if not all(ch.isalnum() or ch in {"_", "-"} for ch in code):
+        raise HTTPException(status_code=400, detail="Profile code solo permite letras, números, _ y -")
     return {
         "code": code,
         "name": name,
         "description": description,
-        "is_system": 1,
+        "is_system": 1 if bool(payload.is_system) else 0,
     }
 
 
@@ -1559,143 +1604,193 @@ def _list_assignments() -> list[dict]:
     ]
 
 
-def _seed_channel_preset_cross_product() -> dict:
-    _ensure_channels_table()
-    _ensure_operator_presets_table()
-    _ensure_assignments_table()
+def _select_auto_real_preset_id_conn(conn: sqlite3.Connection) -> int | None:
+    rows = conn.execute(
+        """
+        SELECT
+            p.id,
+            p.is_default,
+            UPPER(COALESCE(ep.code, ?)) AS execution_profile_code
+        FROM operator_presets p
+        LEFT JOIN execution_profiles ep ON ep.id = p.execution_profile_id
+        ORDER BY p.is_default DESC, p.id ASC
+        """,
+        (DEFAULT_PROFILE_CODE,),
+    ).fetchall()
+    swing_ids = [int(r["id"]) for r in rows if str(r["execution_profile_code"] or DEFAULT_PROFILE_CODE).upper() == "SWING"]
+    if not swing_ids:
+        return None
+    for r in rows:
+        if int(r["is_default"] or 0) == 1 and int(r["id"]) in swing_ids:
+            return int(r["id"])
+    existing = conn.execute(
+        """
+        SELECT config_id, COUNT(1) AS cnt
+        FROM channel_config_assignments
+        WHERE mode = 'real'
+        GROUP BY config_id
+        ORDER BY cnt DESC, config_id ASC
+        LIMIT 1
+        """
+    ).fetchone()
+    if existing is not None:
+        cid = int(existing["config_id"])
+        if cid in swing_ids:
+            return cid
+    return int(sorted(swing_ids)[0])
 
-    channels = _list_channels()
-    presets = _list_operator_presets()
-    if not channels:
-        raise HTTPException(status_code=400, detail="No hay canales para cruzar")
-    if not presets:
-        raise HTTPException(status_code=400, detail="No hay presets para cruzar")
 
-    default_preset_id = None
-    for p in presets:
-        if bool(p.get("is_default")):
-            default_preset_id = int(p["id"])
-            break
-    if default_preset_id is None:
-        default_preset_id = int(presets[0]["id"])
+def _sync_channel_preset_assignments_conn(
+    conn: sqlite3.Connection,
+    *,
+    reason: str = "auto_sync",
+    metadata: dict | None = None,
+    now_ts: str | None = None,
+) -> dict:
+    now = str(now_ts or _utc_now_iso())
+    meta = dict(metadata or {})
+    channels = conn.execute(
+        """
+        SELECT id
+        FROM telegram_channels
+        ORDER BY id ASC
+        """
+    ).fetchall()
+    presets = conn.execute(
+        """
+        SELECT id
+        FROM operator_presets
+        ORDER BY is_default DESC, id ASC
+        """
+    ).fetchall()
+    existing_rows = conn.execute(
+        """
+        SELECT id, channel_id, config_id, mode, is_active
+        FROM channel_config_assignments
+        ORDER BY id ASC
+        """
+    ).fetchall()
 
+    channel_ids = [int(r["id"]) for r in channels]
+    preset_ids = [int(r["id"]) for r in presets]
+    desired_pairs = {(int(cid), int(pid)) for cid in channel_ids for pid in preset_ids}
+    existing_by_pair: dict[tuple[int, int], sqlite3.Row] = {}
     created = 0
     updated = 0
     deleted = 0
-    now = _utc_now_iso()
 
-    with _db_conn() as conn:
-        # Reconstrucción completa: elimina asignaciones actuales para regenerar Canal x Preset.
-        old_rows = conn.execute(
-            """
-            SELECT
-                a.id AS assignment_id, a.channel_id, a.config_id, a.mode, a.is_active,
-                c.name AS channel_name, c.chat_id AS channel_chat_id,
-                p.name AS config_name
-            FROM channel_config_assignments a
-            LEFT JOIN telegram_channels c ON c.id = a.channel_id
-            LEFT JOIN operator_presets p ON p.id = a.config_id
-            ORDER BY a.id ASC
-            """
-        ).fetchall()
-        previous_real_by_channel: dict[int, int] = {}
-        for r in old_rows:
-            channel_id = int(r["channel_id"] or 0)
-            config_id = int(r["config_id"] or 0)
-            if channel_id <= 0 or config_id <= 0:
-                continue
-            if str(r["mode"] or "") == "real" and int(r["is_active"] or 0) == 1:
-                previous_real_by_channel[channel_id] = config_id
-            snap = {
-                "channel_id": channel_id,
-                "channel_name": r["channel_name"],
-                "channel_chat_id": r["channel_chat_id"],
-                "config_id": config_id,
-                "config_name": r["config_name"],
-                "mode": r["mode"],
-                "is_active": 0,
-            }
+    for row in existing_rows:
+        key = (int(row["channel_id"]), int(row["config_id"]))
+        if key not in desired_pairs:
+            delete_snap = _assignment_snapshot_by_id(conn, int(row["id"]))
+            if delete_snap:
+                delete_snap = {
+                    "channel_id": delete_snap["channel_id"],
+                    "channel_name": delete_snap["channel_name"],
+                    "channel_chat_id": delete_snap["channel_chat_id"],
+                    "config_id": delete_snap["config_id"],
+                    "config_name": delete_snap["config_name"],
+                    "mode": delete_snap["mode"],
+                    "is_active": 0,
+                }
             _append_channel_preset_event_conn(
                 conn,
-                assignment_id=int(r["assignment_id"]),
+                assignment_id=int(row["id"]),
                 event_type="deleted",
-                snapshot=snap,
-                details="assignment_deleted_by_seed_cross_product_rebuild",
-                metadata={"source": "seed_cross_product_rebuild"},
+                snapshot=delete_snap,
+                details=f"assignment_deleted_by_{reason}",
+                metadata={"source": "auto_sync", "reason": reason, **meta},
                 ts=now,
             )
+            conn.execute("DELETE FROM channel_config_assignments WHERE id = ?", (int(row["id"]),))
             deleted += 1
-        conn.execute("DELETE FROM channel_config_assignments")
+            continue
+        existing_by_pair[key] = row
 
-        swing_preset_set = set()
-        for p in presets:
-            if str(p.get("execution_profile_code", "")).upper() == "SWING":
-                swing_preset_set.add(int(p["id"]))
-        if not swing_preset_set:
-            # Garantiza que exista al menos un preset SWING para el modo real.
-            first_preset_id = int(presets[0]["id"])
-            swing_profile_id = _swing_profile_id(conn)
-            conn.execute(
-                "UPDATE operator_presets SET execution_profile_id = ?, updated_at = ? WHERE id = ?",
-                (int(swing_profile_id), now, int(first_preset_id)),
-            )
-            swing_preset_set.add(first_preset_id)
-            for pp in presets:
-                if int(pp["id"]) == first_preset_id:
-                    pp["execution_profile_code"] = "SWING"
-                    break
+    real_preset_id = _select_auto_real_preset_id_conn(conn)
 
-        for ch in channels:
-            channel_id = int(ch["id"])
-            previous_real = previous_real_by_channel.get(channel_id)
-            if previous_real is not None and int(previous_real) in swing_preset_set:
-                real_config_id = int(previous_real)
-            elif int(default_preset_id) in swing_preset_set:
-                real_config_id = int(default_preset_id)
-            else:
-                real_config_id = int(sorted(swing_preset_set)[0])
-
-            for p in presets:
-                config_id = int(p["id"])
-                profile_code = str(p.get("execution_profile_code", "")).upper()
-                desired_mode = "real" if (config_id == real_config_id and profile_code == "SWING") else "virtual"
+    for cid in channel_ids:
+        for pid in preset_ids:
+            key = (int(cid), int(pid))
+            desired_mode = "real" if (real_preset_id is not None and int(pid) == int(real_preset_id)) else "virtual"
+            row = existing_by_pair.get(key)
+            if row is None:
                 conn.execute(
                     """
                     INSERT INTO channel_config_assignments
                     (channel_id, config_id, mode, is_active, created_at, updated_at)
                     VALUES (?, ?, ?, 1, ?, ?)
                     """,
-                    (channel_id, config_id, desired_mode, now, now),
+                    (int(cid), int(pid), desired_mode, now, now),
                 )
-                new_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-                new_snap = _assignment_snapshot_by_id(conn, new_id)
+                aid = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+                snap = _assignment_snapshot_by_id(conn, aid)
                 _append_channel_preset_event_conn(
                     conn,
-                    assignment_id=new_id,
+                    assignment_id=aid,
                     event_type="created",
-                    snapshot=new_snap,
-                    details="assignment_created_by_seed_cross_product_rebuild",
-                    metadata={"source": "seed_cross_product_rebuild"},
+                    snapshot=snap,
+                    details=f"assignment_created_by_{reason}",
+                    metadata={"source": "auto_sync", "reason": reason, "mode": desired_mode, **meta},
                     ts=now,
                 )
                 created += 1
-
-        conn.commit()
-
-    expected_total = int(len(channels) * len(presets))
-    final_total = 0
-    with _db_conn() as conn:
-        final_total = int(conn.execute("SELECT COUNT(1) FROM channel_config_assignments").fetchone()[0])
+                continue
+            prev_mode = str(row["mode"] or "virtual")
+            prev_active = int(row["is_active"] or 0)
+            if prev_mode != desired_mode:
+                conn.execute(
+                    """
+                    UPDATE channel_config_assignments
+                    SET mode = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (desired_mode, now, int(row["id"])),
+                )
+                snap = _assignment_snapshot_by_id(conn, int(row["id"]))
+                _append_channel_preset_event_conn(
+                    conn,
+                    assignment_id=int(row["id"]),
+                    event_type="updated",
+                    snapshot=snap,
+                    details=f"assignment_updated_by_{reason}",
+                    metadata={
+                        "source": "auto_sync",
+                        "reason": reason,
+                        "from_mode": prev_mode,
+                        "to_mode": desired_mode,
+                        "from_is_active": prev_active,
+                        "to_is_active": prev_active,
+                        **meta,
+                    },
+                    ts=now,
+                )
+                updated += 1
 
     return {
-        "channels": len(channels),
-        "presets": len(presets),
-        "expected_pairs": expected_total,
-        "created": created,
-        "updated": updated,
-        "deleted": deleted,
-        "final_assignments_total": final_total,
+        "reason": reason,
+        "channels": len(channel_ids),
+        "presets": len(preset_ids),
+        "created": int(created),
+        "updated": int(updated),
+        "deleted": int(deleted),
+        "real_preset_id": int(real_preset_id) if real_preset_id is not None else None,
     }
+
+
+def _sync_channel_preset_assignments(*, reason: str = "auto_sync", metadata: dict | None = None) -> dict:
+    _ensure_channels_table()
+    _ensure_operator_presets_table()
+    _ensure_assignments_table()
+    _ensure_channel_preset_events_table()
+    with _db_conn() as conn:
+        result = _sync_channel_preset_assignments_conn(conn, reason=reason, metadata=metadata)
+        conn.commit()
+    return result
+
+
+def _seed_channel_preset_cross_product() -> dict:
+    return _sync_channel_preset_assignments(reason="seed_cross_product")
 
 
 def _get_operator_defaults():
@@ -1743,6 +1838,53 @@ def _get_operator_defaults():
 def _set_default_preset(conn: sqlite3.Connection, preset_id: int) -> None:
     conn.execute("UPDATE operator_presets SET is_default = 0")
     conn.execute("UPDATE operator_presets SET is_default = 1 WHERE id = ?", (preset_id,))
+
+
+def _validate_single_real_preset_conn(
+    conn: sqlite3.Connection,
+    *,
+    execution_profile_id: int,
+    is_real: bool,
+    current_preset_id: int | None = None,
+) -> None:
+    if not bool(is_real):
+        return
+    prof = conn.execute(
+        "SELECT UPPER(COALESCE(code, ?)) AS code FROM execution_profiles WHERE id = ?",
+        (DEFAULT_PROFILE_CODE, int(execution_profile_id)),
+    ).fetchone()
+    if not prof:
+        raise HTTPException(status_code=404, detail="Execution profile not found")
+    profile_code = str(prof["code"] or DEFAULT_PROFILE_CODE).upper()
+    if profile_code != "SWING":
+        raise HTTPException(status_code=409, detail="El único preset real debe usar perfil SWING.")
+    if current_preset_id is None:
+        existing = conn.execute(
+            """
+            SELECT id, name
+            FROM operator_presets
+            WHERE is_default = 1
+            LIMIT 1
+            """
+        ).fetchone()
+    else:
+        existing = conn.execute(
+            """
+            SELECT id, name
+            FROM operator_presets
+            WHERE is_default = 1 AND id <> ?
+            LIMIT 1
+            """,
+            (int(current_preset_id),),
+        ).fetchone()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No se puede marcar otro preset como real. "
+                f"Ya existe preset real #{int(existing['id'])} ({str(existing['name'])})."
+            ),
+        )
 
 
 def _profile_id_by_code(conn: sqlite3.Connection, code: str) -> int:
@@ -2031,6 +2173,22 @@ def _channel_preset_detail(assignment_id: int, from_ts: str | None = None, to_ts
 
         channel_id = int(first_event["channel_id"]) if first_event["channel_id"] is not None else None
         config_id = int(first_event["config_id"]) if first_event["config_id"] is not None else None
+        current_assignment = _assignment_row_by_id(conn, aid)
+        current_assignment_exists = current_assignment is not None
+        current_assignment_created_at = str(first_event["ts"] or "")
+        current_mode = str(last_event["mode"] or "")
+        current_is_active = bool(last_event["is_active"])
+        current_open_operations = 0
+        if current_assignment is not None:
+            current_assignment_created_at = str(current_assignment["created_at"] or first_event["ts"] or "")
+            current_mode = str(current_assignment["mode"] or current_mode)
+            current_is_active = bool(current_assignment["is_active"])
+            if current_assignment["channel_id"] is not None and current_assignment["config_id"] is not None:
+                current_open_operations = _open_operations_count_for_channel_preset_conn(
+                    conn,
+                    int(current_assignment["channel_id"]),
+                    int(current_assignment["config_id"]),
+                )
 
         periods = []
         for idx, e in enumerate(ev_rows):
@@ -2200,12 +2358,15 @@ def _channel_preset_detail(assignment_id: int, from_ts: str | None = None, to_ts
             "config_id": config_id,
             "config_name": str(first_event["config_name"] or ""),
             "preset_name": str(first_event["config_name"] or ""),
+            "created_at": current_assignment_created_at,
             "first_seen": str(first_event["ts"] or ""),
             "last_seen": str(last_event["ts"] or ""),
             "deleted_at": assignment_end.isoformat(timespec="seconds") if assignment_end is not None else "",
-            "current_mode": str(last_event["mode"] or ""),
-            "current_is_active": bool(last_event["is_active"]),
+            "current_mode": current_mode,
+            "current_is_active": current_is_active,
             "current_event_type": str(last_event["event_type"] or ""),
+            "current_assignment_exists": bool(current_assignment_exists),
+            "current_open_operations": int(current_open_operations),
         },
         "periods": periods,
         "events": [
@@ -3992,6 +4153,16 @@ def status():
     )
 
 
+@app.post("/api/web-auth/verify-password")
+def verify_web_password(payload: WebAuthPasswordPayload):
+    pwd = str(payload.password or "").strip()
+    if not pwd:
+        raise HTTPException(status_code=400, detail="password requerido")
+    if not _is_web_password_valid(pwd):
+        raise HTTPException(status_code=401, detail="Contraseña incorrecta")
+    return JSONResponse({"valid": True})
+
+
 @app.get("/api/channels")
 def get_channels():
     return JSONResponse({"channels": _list_channels()})
@@ -4011,6 +4182,13 @@ def create_channel(payload: ChannelCreateRequest):
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (name, chat_id, external_id, is_active, now, now),
+            )
+            new_channel_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            _sync_channel_preset_assignments_conn(
+                conn,
+                reason="channel_created",
+                metadata={"channel_id": new_channel_id},
+                now_ts=now,
             )
             conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -4036,6 +4214,12 @@ def update_channel(channel_id: int, payload: ChannelUpdateRequest):
                 WHERE id = ?
                 """,
                 (name, chat_id, external_id, is_active, now, channel_id),
+            )
+            _sync_channel_preset_assignments_conn(
+                conn,
+                reason="channel_updated",
+                metadata={"channel_id": int(channel_id)},
+                now_ts=now,
             )
             conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -4084,6 +4268,12 @@ def delete_channel(channel_id: int):
             )
         conn.execute("DELETE FROM channel_config_assignments WHERE channel_id = ?", (channel_id,))
         conn.execute("DELETE FROM telegram_channels WHERE id = ?", (channel_id,))
+        _sync_channel_preset_assignments_conn(
+            conn,
+            reason="channel_deleted",
+            metadata={"channel_id": int(channel_id)},
+            now_ts=now,
+        )
         conn.commit()
     return JSONResponse({"status": "deleted", "channels": _list_channels()})
 
@@ -4178,6 +4368,11 @@ def create_operator_preset(payload: OperatorPresetPayload):
             ).fetchone()
             if not prof:
                 raise HTTPException(status_code=404, detail="Execution profile not found")
+            _validate_single_real_preset_conn(
+                conn,
+                execution_profile_id=int(data["execution_profile_id"]),
+                is_real=bool(data["is_default"]),
+            )
             conn.execute(
                 """
                 INSERT INTO operator_presets (
@@ -4195,6 +4390,12 @@ def create_operator_preset(payload: OperatorPresetPayload):
             preset_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
             if data["is_default"]:
                 _set_default_preset(conn, preset_id)
+            _sync_channel_preset_assignments_conn(
+                conn,
+                reason="preset_created",
+                metadata={"preset_id": int(preset_id)},
+                now_ts=now,
+            )
             conn.commit()
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="Preset name already exists") from exc
@@ -4216,6 +4417,12 @@ def update_operator_preset(preset_id: int, payload: OperatorPresetPayload):
             ).fetchone()
             if not prof:
                 raise HTTPException(status_code=404, detail="Execution profile not found")
+            _validate_single_real_preset_conn(
+                conn,
+                execution_profile_id=int(data["execution_profile_id"]),
+                is_real=bool(data["is_default"]),
+                current_preset_id=int(preset_id),
+            )
             conn.execute(
                 """
                 UPDATE operator_presets
@@ -4232,6 +4439,12 @@ def update_operator_preset(preset_id: int, payload: OperatorPresetPayload):
             )
             if data["is_default"]:
                 _set_default_preset(conn, preset_id)
+            _sync_channel_preset_assignments_conn(
+                conn,
+                reason="preset_updated",
+                metadata={"preset_id": int(preset_id)},
+                now_ts=now,
+            )
             conn.commit()
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="Preset name already exists") from exc
@@ -4244,7 +4457,14 @@ def set_operator_preset_default(preset_id: int):
         row = conn.execute("SELECT id FROM operator_presets WHERE id = ?", (preset_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Preset not found")
+        now = _utc_now_iso()
         _set_default_preset(conn, preset_id)
+        _sync_channel_preset_assignments_conn(
+            conn,
+            reason="preset_set_default",
+            metadata={"preset_id": int(preset_id)},
+            now_ts=now,
+        )
         conn.commit()
     return JSONResponse({"status": "default_set", "presets": _list_operator_presets()})
 
@@ -4294,6 +4514,12 @@ def delete_operator_preset(preset_id: int):
             if other:
                 _set_default_preset(conn, int(other["id"]))
         conn.execute("DELETE FROM channel_config_assignments WHERE config_id = ?", (preset_id,))
+        _sync_channel_preset_assignments_conn(
+            conn,
+            reason="preset_deleted",
+            metadata={"preset_id": int(preset_id)},
+            now_ts=now,
+        )
         conn.commit()
     return JSONResponse({"status": "deleted", "presets": _list_operator_presets()})
 
@@ -4305,186 +4531,34 @@ def list_assignments():
 
 @app.post("/api/assignments/seed-cross-product")
 def seed_assignments_cross_product():
-    result = _seed_channel_preset_cross_product()
-    return JSONResponse({"status": "seeded", "result": result, "assignments": _list_assignments()})
+    raise HTTPException(
+        status_code=409,
+        detail="Asignaciones Canal.Preset se gestionan automáticamente al crear/editar/eliminar canales o presets.",
+    )
 
 
 @app.post("/api/assignments")
 def create_assignment(payload: AssignmentCreateRequest):
-    mode = _normalize_assignment_mode(payload.mode)
-    now = _utc_now_iso()
-    with _db_conn() as conn:
-        ch = conn.execute("SELECT id FROM telegram_channels WHERE id = ?", (int(payload.channel_id),)).fetchone()
-        if not ch:
-            raise HTTPException(status_code=404, detail="Channel not found")
-        cfg = conn.execute(
-            """
-            SELECT
-                p.id,
-                COALESCE(ep.code, ?) AS execution_profile_code
-            FROM operator_presets p
-            LEFT JOIN execution_profiles ep ON ep.id = p.execution_profile_id
-            WHERE p.id = ?
-            """,
-            (DEFAULT_PROFILE_CODE, int(payload.config_id)),
-        ).fetchone()
-        if not cfg:
-            raise HTTPException(status_code=404, detail="Config not found")
-        if mode == "real":
-            cfg_code = str(cfg["execution_profile_code"] or DEFAULT_PROFILE_CODE).upper()
-            if cfg_code != "SWING":
-                raise HTTPException(
-                    status_code=409,
-                    detail="Modo real solo permitido con presets de perfil SWING.",
-                )
-            existing_real = conn.execute(
-                """
-                SELECT a.id, p.name AS preset_name
-                FROM channel_config_assignments a
-                JOIN operator_presets p ON p.id = a.config_id
-                WHERE a.channel_id = ? AND a.mode = 'real'
-                LIMIT 1
-                """,
-                (int(payload.channel_id),),
-            ).fetchone()
-            if existing_real:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "No se puede crear más de una asignación en modo real por canal. "
-                        f"Real actual: #{int(existing_real['id'])} ({str(existing_real['preset_name'])})."
-                    ),
-                )
-        try:
-            conn.execute(
-                """
-                INSERT INTO channel_config_assignments
-                (channel_id, config_id, mode, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    int(payload.channel_id),
-                    int(payload.config_id),
-                    mode,
-                    1 if bool(payload.is_active) else 0,
-                    now,
-                    now,
-                ),
-            )
-            assignment_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-            snap = _assignment_snapshot_by_id(conn, assignment_id)
-            _append_channel_preset_event_conn(
-                conn,
-                assignment_id=assignment_id,
-                event_type="created",
-                snapshot=snap,
-                details="assignment_created",
-                metadata={"source": "api"},
-                ts=now,
-            )
-            conn.commit()
-        except sqlite3.IntegrityError as exc:
-            raise HTTPException(status_code=409, detail="Assignment already exists for this channel+config") from exc
-    return JSONResponse({"status": "created", "assignments": _list_assignments()})
+    raise HTTPException(
+        status_code=409,
+        detail="Asignaciones Canal.Preset se crean automáticamente desde canales y presets.",
+    )
 
 
 @app.put("/api/assignments/{assignment_id}")
 def update_assignment(assignment_id: int, payload: AssignmentUpdateRequest):
-    mode = _normalize_assignment_mode(payload.mode)
-    now = _utc_now_iso()
-    with _db_conn() as conn:
-        row = conn.execute(
-            "SELECT id, channel_id, config_id, mode, is_active FROM channel_config_assignments WHERE id = ?",
-            (int(assignment_id),),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Assignment not found")
-        channel_id = int(row["channel_id"])
-        if mode == "real":
-            cfg_code = _preset_profile_code(conn, int(row["config_id"]))
-            if cfg_code != "SWING":
-                raise HTTPException(
-                    status_code=409,
-                    detail="Modo real solo permitido con presets de perfil SWING.",
-                )
-            existing_real = conn.execute(
-                """
-                SELECT a.id, p.name AS preset_name
-                FROM channel_config_assignments a
-                JOIN operator_presets p ON p.id = a.config_id
-                WHERE a.channel_id = ? AND a.mode = 'real' AND a.id != ?
-                LIMIT 1
-                """,
-                (channel_id, int(assignment_id)),
-            ).fetchone()
-            if existing_real:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "No se puede tener más de una asignación en modo real por canal. "
-                        f"Real actual: #{int(existing_real['id'])} ({str(existing_real['preset_name'])})."
-                    ),
-                )
-        conn.execute(
-            """
-            UPDATE channel_config_assignments
-            SET mode = ?, is_active = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (mode, 1 if bool(payload.is_active) else 0, now, int(assignment_id)),
-        )
-        snap = _assignment_snapshot_by_id(conn, int(assignment_id))
-        _append_channel_preset_event_conn(
-            conn,
-            assignment_id=int(assignment_id),
-            event_type="updated",
-            snapshot=snap,
-            details="assignment_updated",
-            metadata={
-                "source": "api",
-                "from_mode": str(row["mode"] or ""),
-                "to_mode": mode,
-                "from_is_active": int(row["is_active"] or 0),
-                "to_is_active": 1 if bool(payload.is_active) else 0,
-            },
-            ts=now,
-        )
-        conn.commit()
-    return JSONResponse({"status": "updated", "assignments": _list_assignments()})
+    raise HTTPException(
+        status_code=409,
+        detail="Asignaciones Canal.Preset se actualizan automáticamente al modificar canales o presets.",
+    )
 
 
 @app.delete("/api/assignments/{assignment_id}")
 def delete_assignment(assignment_id: int):
-    with _db_conn() as conn:
-        row = conn.execute("SELECT id FROM channel_config_assignments WHERE id = ?", (int(assignment_id),)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Assignment not found")
-        snap = _assignment_snapshot_by_id(conn, int(assignment_id))
-        now = _utc_now_iso()
-        conn.execute("DELETE FROM channel_config_assignments WHERE id = ?", (int(assignment_id),))
-        if snap:
-            delete_snap = {
-                "channel_id": snap["channel_id"],
-                "channel_name": snap["channel_name"],
-                "channel_chat_id": snap["channel_chat_id"],
-                "config_id": snap["config_id"],
-                "config_name": snap["config_name"],
-                "mode": snap["mode"],
-                "is_active": 0,
-            }
-        else:
-            delete_snap = None
-        _append_channel_preset_event_conn(
-            conn,
-            assignment_id=int(assignment_id),
-            event_type="deleted",
-            snapshot=delete_snap,
-            details="assignment_deleted",
-            metadata={"source": "api"},
-            ts=now,
-        )
-        conn.commit()
-    return JSONResponse({"status": "deleted", "assignments": _list_assignments()})
+    raise HTTPException(
+        status_code=409,
+        detail="Asignaciones Canal.Preset se eliminan automáticamente desde canales o presets.",
+    )
 
 
 @app.get("/api/channel-presets/registry")
@@ -4507,6 +4581,65 @@ def channel_preset_detail(assignment_id: int, from_ts: str = "", to_ts: str = ""
     if not detail:
         raise HTTPException(status_code=404, detail="Canal.Preset no encontrado")
     return JSONResponse(detail)
+
+
+@app.post("/api/channel-presets/{assignment_id}/set-active")
+def channel_preset_set_active(assignment_id: int, payload: ChannelPresetSetActivePayload):
+    aid = int(assignment_id)
+    target_active = 1 if bool(payload.is_active) else 0
+    now = _utc_now_iso()
+    with _db_conn() as conn:
+        row = _assignment_row_by_id(conn, aid)
+        if not row:
+            raise HTTPException(status_code=404, detail="Canal.Preset no está disponible para activar/desactivar.")
+        from_active = int(row["is_active"] or 0)
+        if target_active == 0:
+            open_count = _open_operations_count_for_channel_preset_conn(
+                conn,
+                int(row["channel_id"]),
+                int(row["config_id"]),
+            )
+            if open_count > 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Canal.Preset tiene operación abierta, por favor ciérrala antes de desactivar este Canal.Preset."
+                    ),
+                )
+        if from_active != target_active:
+            ev_type = "activation" if int(target_active) == 1 else "deactivation"
+            ev_details = "assignment_activated_by_api" if int(target_active) == 1 else "assignment_deactivated_by_api"
+            conn.execute(
+                """
+                UPDATE channel_config_assignments
+                SET is_active = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (int(target_active), now, aid),
+            )
+            snap = _assignment_snapshot_by_id(conn, aid)
+            _append_channel_preset_event_conn(
+                conn,
+                assignment_id=aid,
+                event_type=ev_type,
+                snapshot=snap,
+                details=ev_details,
+                metadata={
+                    "source": "api",
+                    "action": "set_active",
+                    "from_is_active": int(from_active),
+                    "to_is_active": int(target_active),
+                },
+                ts=now,
+            )
+            conn.commit()
+    return JSONResponse(
+        {
+            "status": "updated",
+            "assignment_id": aid,
+            "is_active": bool(target_active),
+        }
+    )
 
 
 @app.get("/api/operations/open")

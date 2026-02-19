@@ -303,13 +303,8 @@ body {
   min-width: 168px;
 }
 
-.operations-history-table th:nth-child(12),
-.operations-history-table td:nth-child(12) {
-  min-width: 145px;
-}
-
-.operations-history-table th:nth-child(13),
-.operations-history-table td:nth-child(13) {
+.operations-history-table th:nth-child(11),
+.operations-history-table td:nth-child(11) {
   min-width: 108px;
 }
 
@@ -540,6 +535,13 @@ input:focus {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.btn.danger {
+  border-color: rgba(255, 108, 122, 0.72);
+  background: rgba(124, 24, 35, 0.45);
+  color: #ffd3d7;
+  font-weight: 700;
+}
+
 .terminal {
   margin: 0;
   min-height: 280px;
@@ -681,6 +683,50 @@ input:focus {
 
 .toast-error {
   border-color: rgba(255, 108, 122, 0.62);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(6, 11, 20, 0.58);
+  backdrop-filter: blur(7px);
+  z-index: 9500;
+}
+
+.modal-overlay.hidden {
+  display: none;
+}
+
+.modal-panel {
+  width: min(980px, 96vw);
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.modal-panel-mini {
+  width: min(520px, 95vw);
+}
+
+.modal-panel-danger {
+  border-color: rgba(255, 108, 122, 0.6);
+  background: rgba(52, 14, 20, 0.92);
+}
+
+.modal-danger-note {
+  color: #ffc0c7;
+}
+
+.modal-detail-text {
+  margin: 0 0 10px;
+  color: #dbe6ff;
+}
+
+body.modal-open {
+  overflow: hidden;
 }
 
 code {

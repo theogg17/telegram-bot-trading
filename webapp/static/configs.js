@@ -9,14 +9,54 @@ const profilesBody = document.getElementById("profiles-body");
 const presetsBody = document.getElementById("presets-body");
 const assignmentsBody = document.getElementById("assignments-body");
 
-const assignmentChannel = document.getElementById("assignment_channel");
-const assignmentConfig = document.getElementById("assignment_config");
+const channelOpenCreateBtn = document.getElementById("channel-open-create");
+const channelModal = document.getElementById("channel-modal");
+const channelModalTitle = document.getElementById("channel-modal-title");
+const channelModalSaveBtn = document.getElementById("channel-modal-save");
+const channelModalCancelBtn = document.getElementById("channel-modal-cancel");
+const channelSaveConfirmModal = document.getElementById("channel-save-confirm-modal");
+const channelSaveConfirmTitle = document.getElementById("channel-save-confirm-title");
+const channelSaveConfirmText = document.getElementById("channel-save-confirm-text");
+const channelSaveConfirmAcceptBtn = document.getElementById("channel-save-confirm-accept");
+const channelSaveConfirmCancelBtn = document.getElementById("channel-save-confirm-cancel");
+const channelSuccessModal = document.getElementById("channel-success-modal");
+const channelSuccessTitle = document.getElementById("channel-success-title");
+const channelSuccessDetail = document.getElementById("channel-success-detail");
+const channelSuccessTime = document.getElementById("channel-success-time");
+const channelSuccessCloseBtn = document.getElementById("channel-success-close");
+const channelDeleteModal = document.getElementById("channel-delete-modal");
+const channelDeleteDetail = document.getElementById("channel-delete-detail");
+const channelDeletePassword = document.getElementById("channel-delete-password");
+const channelDeleteMsg = document.getElementById("channel-delete-msg");
+const channelDeleteConfirmBtn = document.getElementById("channel-delete-confirm");
+const channelDeleteCancelBtn = document.getElementById("channel-delete-cancel");
+
+const profilesOpenModalBtn = document.getElementById("profiles-open-modal");
+const profilesModal = document.getElementById("profiles-modal");
+const profilesModalCloseBtn = document.getElementById("profiles-modal-close");
+
 const presetExecutionProfile = document.getElementById("preset_execution_profile_id");
-const cpSearchMsg = document.getElementById("cp-search-msg");
-const cpSearchResults = document.getElementById("cp-search-results");
-const cpSearchId = document.getElementById("cp-search-id");
-const cpSearchFrom = document.getElementById("cp-search-from");
-const cpSearchTo = document.getElementById("cp-search-to");
+const presetOpenCreateBtn = document.getElementById("preset-open-create");
+const presetRefreshBtn = document.getElementById("preset-refresh");
+const presetModal = document.getElementById("preset-modal");
+const presetModalTitle = document.getElementById("preset-modal-title");
+const presetModalSaveBtn = document.getElementById("preset-modal-save");
+const presetModalCancelBtn = document.getElementById("preset-modal-cancel");
+const presetSaveConfirmModal = document.getElementById("preset-save-confirm-modal");
+const presetSaveConfirmTitle = document.getElementById("preset-save-confirm-title");
+const presetSaveConfirmText = document.getElementById("preset-save-confirm-text");
+const presetSaveConfirmAcceptBtn = document.getElementById("preset-save-confirm-accept");
+const presetSaveConfirmCancelBtn = document.getElementById("preset-save-confirm-cancel");
+const presetSuccessModal = document.getElementById("preset-success-modal");
+const presetSuccessDetail = document.getElementById("preset-success-detail");
+const presetSuccessTime = document.getElementById("preset-success-time");
+const presetSuccessCloseBtn = document.getElementById("preset-success-close");
+const presetDeleteModal = document.getElementById("preset-delete-modal");
+const presetDeleteDetail = document.getElementById("preset-delete-detail");
+const presetDeletePassword = document.getElementById("preset-delete-password");
+const presetDeleteMsg = document.getElementById("preset-delete-msg");
+const presetDeleteConfirmBtn = document.getElementById("preset-delete-confirm");
+const presetDeleteCancelBtn = document.getElementById("preset-delete-cancel");
 
 let channels = [];
 let profiles = [];
@@ -24,7 +64,12 @@ let presets = [];
 let assignments = [];
 let selectedProfileId = null;
 let selectedPresetId = null;
-let selectedAssignmentId = null;
+let channelModalMode = "create";
+let pendingChannelSaveMode = "";
+let pendingDeleteChannelId = null;
+let presetModalMode = "create";
+let pendingPresetSaveMode = "";
+let pendingDeletePresetId = null;
 
 function showSavedToast(message) {
   if (typeof window.showSavedToast === "function") {
@@ -40,21 +85,172 @@ async function readJson(res) {
   }
 }
 
-function toIsoForApi(localValue, isEnd = false) {
-  if (window.dateTime24 && typeof window.dateTime24.normalizeForApi === "function") {
-    return window.dateTime24.normalizeForApi(localValue, isEnd);
+function nowLabel() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function fmtDateTime(value) {
+  if (!value) {
+    return "-";
   }
-  if (!localValue) {
-    return "";
-  }
-  const d = new Date(localValue);
+  const d = new Date(value);
   if (Number.isNaN(d.getTime())) {
-    return localValue;
+    return String(value);
   }
-  if (isEnd && localValue.length <= 16) {
-    d.setSeconds(59, 999);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function openModal(modal) {
+  if (!modal) {
+    return;
   }
-  return d.toISOString();
+  modal.hidden = false;
+  modal.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+}
+
+function closeModal(modal) {
+  if (!modal) {
+    return;
+  }
+  modal.classList.add("hidden");
+  modal.hidden = true;
+  if (
+    (!profilesModal || profilesModal.hidden) &&
+    (!channelModal || channelModal.hidden) &&
+    (!channelSaveConfirmModal || channelSaveConfirmModal.hidden) &&
+    (!channelSuccessModal || channelSuccessModal.hidden) &&
+    (!channelDeleteModal || channelDeleteModal.hidden) &&
+    (!presetModal || presetModal.hidden) &&
+    (!presetSaveConfirmModal || presetSaveConfirmModal.hidden) &&
+    (!presetSuccessModal || presetSuccessModal.hidden) &&
+    (!presetDeleteModal || presetDeleteModal.hidden)
+  ) {
+    document.body.classList.remove("modal-open");
+  }
+}
+
+function isModalOpen(modal) {
+  return !!modal && !modal.hidden;
+}
+
+function openProfilesModal() {
+  openModal(profilesModal);
+}
+
+function closeProfilesModal() {
+  closeModal(profilesModal);
+}
+
+function openChannelModal(mode = "create", channel = null) {
+  channelModalMode = mode === "edit" ? "edit" : "create";
+  if (channelModalMode === "edit" && channel) {
+    setChannelForm(channel);
+    if (channelModalTitle) {
+      channelModalTitle.textContent = "Editar canal";
+    }
+    if (channelModalSaveBtn) {
+      channelModalSaveBtn.textContent = "Actualizar canal";
+    }
+  } else {
+    setChannelForm();
+    if (channelModalTitle) {
+      channelModalTitle.textContent = "Agregar canal";
+    }
+    if (channelModalSaveBtn) {
+      channelModalSaveBtn.textContent = "Guardar canal";
+    }
+  }
+  openModal(channelModal);
+}
+
+function closeChannelModal() {
+  channelModalMode = "create";
+  setChannelForm();
+  if (channelModalTitle) {
+    channelModalTitle.textContent = "Agregar canal";
+  }
+  if (channelModalSaveBtn) {
+    channelModalSaveBtn.textContent = "Guardar canal";
+  }
+  closeModal(channelModal);
+}
+
+function openChannelSaveConfirmModal(mode = "edit") {
+  pendingChannelSaveMode = mode === "create" ? "create" : "edit";
+  if (channelSaveConfirmTitle) {
+    channelSaveConfirmTitle.textContent = pendingChannelSaveMode === "edit"
+      ? "Confirmar actualización de canal"
+      : "Confirmar creación de canal";
+  }
+  if (channelSaveConfirmText) {
+    channelSaveConfirmText.textContent = pendingChannelSaveMode === "edit"
+      ? "¿Quieres guardar los cambios de este canal de Telegram?"
+      : "¿Quieres guardar este nuevo canal de Telegram?";
+  }
+  openModal(channelSaveConfirmModal);
+}
+
+function closeChannelSaveConfirmModal() {
+  pendingChannelSaveMode = "";
+  closeModal(channelSaveConfirmModal);
+}
+
+function openChannelSuccessModal(detailText, action = "updated") {
+  if (channelSuccessTitle) {
+    channelSuccessTitle.textContent = action === "deleted"
+      ? "Canal eliminado correctamente"
+      : "Canal guardado correctamente";
+  }
+  if (channelSuccessDetail) {
+    channelSuccessDetail.textContent = detailText || "Se actualizó el canal.";
+  }
+  if (channelSuccessTime) {
+    channelSuccessTime.textContent = `Hora: ${nowLabel()}`;
+  }
+  openModal(channelSuccessModal);
+}
+
+function closeChannelSuccessModal() {
+  closeModal(channelSuccessModal);
+}
+
+function openChannelDeleteModal(id) {
+  const channel = channels.find((x) => Number(x.id) === Number(id));
+  pendingDeleteChannelId = Number(id);
+  if (channelDeleteDetail) {
+    channelDeleteDetail.textContent = channel
+      ? `Canal seleccionado: #${channel.id} ${channel.name} (${channel.chat_id})`
+      : `Canal seleccionado: #${id}`;
+  }
+  if (channelDeletePassword) {
+    channelDeletePassword.value = "";
+  }
+  if (channelDeleteMsg) {
+    channelDeleteMsg.textContent = "Confirma tu contraseña para continuar.";
+  }
+  openModal(channelDeleteModal);
+  if (channelDeletePassword) {
+    setTimeout(() => {
+      try {
+        channelDeletePassword.focus();
+      } catch {}
+    }, 50);
+  }
+}
+
+function closeChannelDeleteModal() {
+  pendingDeleteChannelId = null;
+  if (channelDeletePassword) {
+    channelDeletePassword.value = "";
+  }
+  if (channelDeleteMsg) {
+    channelDeleteMsg.textContent = "Confirma tu contraseña para continuar.";
+  }
+  closeModal(channelDeleteModal);
 }
 
 function setChannelForm(channel = null) {
@@ -72,6 +268,38 @@ function channelPayload() {
     external_id: document.getElementById("channel_external_id").value.trim(),
     is_active: document.getElementById("channel_is_active").checked,
   };
+}
+
+function summarizeChannelChanges(beforeChannel, afterChannel, action = "created") {
+  if (action === "deleted") {
+    if (beforeChannel) {
+      return `Se eliminó canal #${beforeChannel.id} (${beforeChannel.name}) chat_id=${beforeChannel.chat_id}.`;
+    }
+    return "Se eliminó un canal de Telegram.";
+  }
+  if (action === "created") {
+    return `Se agregó canal #${afterChannel.id} (${afterChannel.name}) chat_id=${afterChannel.chat_id}.`;
+  }
+  if (!beforeChannel || !afterChannel) {
+    return "Se actualizó un canal.";
+  }
+  const changes = [];
+  if (String(beforeChannel.name || "") !== String(afterChannel.name || "")) {
+    changes.push(`nombre: "${beforeChannel.name}" -> "${afterChannel.name}"`);
+  }
+  if (String(beforeChannel.chat_id || "") !== String(afterChannel.chat_id || "")) {
+    changes.push(`chat_id: ${beforeChannel.chat_id} -> ${afterChannel.chat_id}`);
+  }
+  if (String(beforeChannel.external_id || "") !== String(afterChannel.external_id || "")) {
+    changes.push(`identificador: "${beforeChannel.external_id || "-"}" -> "${afterChannel.external_id || "-"}"`);
+  }
+  if (!!beforeChannel.is_active !== !!afterChannel.is_active) {
+    changes.push(`activo: ${beforeChannel.is_active ? "si" : "no"} -> ${afterChannel.is_active ? "si" : "no"}`);
+  }
+  if (!changes.length) {
+    return `Se actualizó canal #${afterChannel.id} (${afterChannel.name}) sin cambios visibles.`;
+  }
+  return `Se actualizó canal #${afterChannel.id} (${afterChannel.name}): ${changes.join("; ")}.`;
 }
 
 function renderChannelRows() {
@@ -196,6 +424,167 @@ function presetPayload() {
   };
 }
 
+function openPresetModal(mode = "create", preset = null) {
+  if (!presetModal) {
+    return;
+  }
+  presetModalMode = mode === "edit" ? "edit" : "create";
+  if (presetModalMode === "edit" && preset) {
+    selectedPresetId = Number(preset.id);
+    setPresetForm(preset);
+    if (presetModalTitle) {
+      presetModalTitle.textContent = "Editar preset";
+    }
+    if (presetModalSaveBtn) {
+      presetModalSaveBtn.textContent = "Actualizar preset";
+    }
+  } else {
+    selectedPresetId = null;
+    setPresetForm();
+    if (presetModalTitle) {
+      presetModalTitle.textContent = "Agregar preset";
+    }
+    if (presetModalSaveBtn) {
+      presetModalSaveBtn.textContent = "Guardar preset";
+    }
+  }
+  openModal(presetModal);
+}
+
+function closePresetModal() {
+  if (!presetModal) {
+    return;
+  }
+  closeModal(presetModal);
+  presetModalMode = "create";
+  selectedPresetId = null;
+  setPresetForm();
+  if (presetModalTitle) {
+    presetModalTitle.textContent = "Agregar preset";
+  }
+  if (presetModalSaveBtn) {
+    presetModalSaveBtn.textContent = "Guardar preset";
+  }
+}
+
+function openPresetSaveConfirmModal(mode = "create") {
+  pendingPresetSaveMode = mode === "edit" ? "edit" : "create";
+  if (presetSaveConfirmTitle) {
+    presetSaveConfirmTitle.textContent = pendingPresetSaveMode === "edit" ? "Confirmar actualización" : "Confirmar guardado";
+  }
+  if (presetSaveConfirmText) {
+    presetSaveConfirmText.textContent = pendingPresetSaveMode === "edit"
+      ? "¿Quieres actualizar este preset del Operador?"
+      : "¿Quieres guardar este nuevo preset del Operador?";
+  }
+  openModal(presetSaveConfirmModal);
+}
+
+function closePresetSaveConfirmModal() {
+  pendingPresetSaveMode = "";
+  closeModal(presetSaveConfirmModal);
+}
+
+function openPresetSuccessModal(detailText) {
+  if (presetSuccessDetail) {
+    presetSuccessDetail.textContent = detailText || "Se guardó la configuración.";
+  }
+  if (presetSuccessTime) {
+    presetSuccessTime.textContent = `Hora: ${nowLabel()}`;
+  }
+  openModal(presetSuccessModal);
+}
+
+function closePresetSuccessModal() {
+  closeModal(presetSuccessModal);
+}
+
+function openPresetDeleteModal(id) {
+  const preset = presets.find((x) => Number(x.id) === Number(id));
+  pendingDeletePresetId = Number(id);
+  if (presetDeleteDetail) {
+    presetDeleteDetail.textContent = preset
+      ? `Preset seleccionado: #${preset.id} ${preset.name} (${preset.execution_profile_code || "-"})`
+      : `Preset seleccionado: #${id}`;
+  }
+  if (presetDeletePassword) {
+    presetDeletePassword.value = "";
+  }
+  if (presetDeleteMsg) {
+    presetDeleteMsg.textContent = "Confirma tu contraseña para continuar.";
+  }
+  openModal(presetDeleteModal);
+  if (presetDeletePassword) {
+    setTimeout(() => {
+      try {
+        presetDeletePassword.focus();
+      } catch {}
+    }, 50);
+  }
+}
+
+function closePresetDeleteModal() {
+  pendingDeletePresetId = null;
+  if (presetDeletePassword) {
+    presetDeletePassword.value = "";
+  }
+  if (presetDeleteMsg) {
+    presetDeleteMsg.textContent = "Confirma tu contraseña para continuar.";
+  }
+  closeModal(presetDeleteModal);
+}
+
+function summarizePresetChanges(beforePreset, afterPreset, action = "created") {
+  if (!afterPreset) {
+    return action === "updated" ? "Se actualizó un preset." : "Se agregó un preset.";
+  }
+  if (action !== "updated" || !beforePreset) {
+    return `Se agregó preset #${afterPreset.id} (${afterPreset.name}) con perfil ${afterPreset.execution_profile_code || "-"}.`;
+  }
+  const changes = [];
+  if (String(beforePreset.name || "") !== String(afterPreset.name || "")) {
+    changes.push(`nombre: "${beforePreset.name}" -> "${afterPreset.name}"`);
+  }
+  if (Number(beforePreset.execution_profile_id || 0) !== Number(afterPreset.execution_profile_id || 0)) {
+    changes.push(`perfil: ${beforePreset.execution_profile_code || "-"} -> ${afterPreset.execution_profile_code || "-"}`);
+  }
+  if (Number(beforePreset.total_volume || 0) !== Number(afterPreset.total_volume || 0)) {
+    changes.push(`volumen: ${beforePreset.total_volume} -> ${afterPreset.total_volume}`);
+  }
+  if (Number(beforePreset.near_entry_pips_min || 0) !== Number(afterPreset.near_entry_pips_min || 0)) {
+    changes.push(`near min: ${beforePreset.near_entry_pips_min} -> ${afterPreset.near_entry_pips_min}`);
+  }
+  if (Number(beforePreset.near_entry_spread_mult || 0) !== Number(afterPreset.near_entry_spread_mult || 0)) {
+    changes.push(`near mult: ${beforePreset.near_entry_spread_mult} -> ${afterPreset.near_entry_spread_mult}`);
+  }
+  if (!!beforePreset.verify_order_after_send !== !!afterPreset.verify_order_after_send) {
+    changes.push(`verificar orden: ${beforePreset.verify_order_after_send ? "si" : "no"} -> ${afterPreset.verify_order_after_send ? "si" : "no"}`);
+  }
+  if (!!beforePreset.auto_close_on_mismatch !== !!afterPreset.auto_close_on_mismatch) {
+    changes.push(`auto mismatch: ${beforePreset.auto_close_on_mismatch ? "si" : "no"} -> ${afterPreset.auto_close_on_mismatch ? "si" : "no"}`);
+  }
+  if (!!beforePreset.is_default !== !!afterPreset.is_default) {
+    changes.push(`default: ${beforePreset.is_default ? "si" : "no"} -> ${afterPreset.is_default ? "si" : "no"}`);
+  }
+  if (!changes.length) {
+    return `Se actualizó preset #${afterPreset.id} (${afterPreset.name}) sin cambios visibles en campos principales.`;
+  }
+  return `Se actualizó preset #${afterPreset.id} (${afterPreset.name}): ${changes.join("; ")}.`;
+}
+
+async function verifyWebPassword(password) {
+  const res = await fetch("/api/web-auth/verify-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: String(password || "") }),
+  });
+  const data = await readJson(res);
+  if (!res.ok) {
+    return { ok: false, error: data.detail || "Contraseña inválida" };
+  }
+  return { ok: !!data.valid };
+}
+
 function renderPresetRows() {
   presetsBody.innerHTML = "";
   if (!presets.length) {
@@ -224,27 +613,14 @@ function renderPresetRows() {
 }
 
 function fillAssignmentSelects() {
-  assignmentChannel.innerHTML = "";
-  assignmentConfig.innerHTML = "";
-  for (const c of channels) {
-    const opt = document.createElement("option");
-    opt.value = String(c.id);
-    opt.textContent = `${c.name} (${c.chat_id})`;
-    assignmentChannel.appendChild(opt);
-  }
-  for (const p of presets) {
-    const opt = document.createElement("option");
-    opt.value = String(p.id);
-    opt.textContent = `${p.name} [${p.execution_profile_code || "-"}]`;
-    assignmentConfig.appendChild(opt);
-  }
+  // La UI ya no tiene asignador manual, se mantiene no-op por compatibilidad.
 }
 
 function renderAssignmentRows() {
   assignmentsBody.innerHTML = "";
   if (!assignments.length) {
     const tr = document.createElement("tr");
-    tr.innerHTML = '<td colspan="7" class="empty">Sin asignaciones</td>';
+    tr.innerHTML = '<td colspan="8" class="empty">Sin asignaciones</td>';
     assignmentsBody.appendChild(tr);
     return;
   }
@@ -258,12 +634,36 @@ function renderAssignmentRows() {
       <td>${a.mode}</td>
       <td>${a.is_active ? "si" : "no"}</td>
       <td class="row-actions">
-        <button class="mini-btn" data-action="edit-assignment" data-id="${a.id}">Editar</button>
-        <button class="mini-btn danger" data-action="delete-assignment" data-id="${a.id}">Eliminar</button>
+        <button class="mini-btn" data-action="details-assignment" data-id="${a.id}">Detalles</button>
       </td>
+      <td>${fmtDateTime(a.created_at)}</td>
     `;
     assignmentsBody.appendChild(tr);
   }
+}
+
+function activeRealPreset(excludePresetId = null) {
+  const excluded = excludePresetId == null ? null : Number(excludePresetId);
+  return presets.find((p) => !!p.is_default && (excluded == null || Number(p.id) !== excluded)) || null;
+}
+
+function validateRealPresetSelection(payload, editingPresetId = null) {
+  if (!payload || !payload.is_default) {
+    return { ok: true };
+  }
+  const selectedProfile = profiles.find((p) => Number(p.id) === Number(payload.execution_profile_id));
+  const selectedCode = String(selectedProfile?.code || "").toUpperCase();
+  if (selectedCode && selectedCode !== "SWING") {
+    return { ok: false, message: "El único preset real debe usar perfil SWING." };
+  }
+  const existingReal = activeRealPreset(editingPresetId);
+  if (existingReal) {
+    return {
+      ok: false,
+      message: `No se puede marcar otro preset como real. Ya existe #${existingReal.id} (${existingReal.name}).`,
+    };
+  }
+  return { ok: true };
 }
 
 async function refreshStatus() {
@@ -297,14 +697,19 @@ async function loadChannels() {
 }
 
 async function saveChannel() {
+  openChannelSaveConfirmModal(channelModalMode);
+}
+
+async function persistChannel() {
   const id = document.getElementById("channel_id").value.trim();
   const payload = channelPayload();
   if (!payload.name || !payload.chat_id) {
     if (channelsMsg) {
       channelsMsg.textContent = "Nombre y chat ID son obligatorios";
     }
-    return;
+    return { ok: false, error: "Datos incompletos" };
   }
+  const before = id ? channels.find((c) => Number(c.id) === Number(id)) || null : null;
   if (channelsMsg) {
     channelsMsg.textContent = id ? "Actualizando canal..." : "Creando canal...";
   }
@@ -320,22 +725,30 @@ async function saveChannel() {
     if (channelsMsg) {
       channelsMsg.textContent = data.detail || "No se pudo guardar";
     }
-    return;
+    return { ok: false, error: data.detail || "No se pudo guardar" };
   }
   channels = data.channels || [];
   renderChannelRows();
   fillAssignmentSelects();
+  const created = !id ? channels.find((c) => c.chat_id === payload.chat_id && c.name === payload.name) || null : null;
+  const updated = id ? channels.find((c) => Number(c.id) === Number(id)) || null : null;
   setChannelForm();
   if (channelsMsg) {
     channelsMsg.textContent = id ? "Canal actualizado" : "Canal creado";
   }
   showSavedToast(id ? "Canal actualizado correctamente" : "Canal creado correctamente");
+  return {
+    ok: true,
+    action: id ? "updated" : "created",
+    channel: id ? updated : created,
+    detail: id
+      ? summarizeChannelChanges(before, updated, "updated")
+      : summarizeChannelChanges(null, created || { id: "-", name: payload.name, chat_id: payload.chat_id }, "created"),
+  };
 }
 
 async function deleteChannel(id) {
-  if (!window.confirm("Seguro que quieres eliminar este canal?")) {
-    return;
-  }
+  const before = channels.find((c) => Number(c.id) === Number(id)) || null;
   if (channelsMsg) {
     channelsMsg.textContent = "Eliminando canal...";
   }
@@ -345,7 +758,7 @@ async function deleteChannel(id) {
     if (channelsMsg) {
       channelsMsg.textContent = data.detail || "No se pudo eliminar";
     }
-    return;
+    return { ok: false, error: data.detail || "No se pudo eliminar" };
   }
   channels = data.channels || [];
   renderChannelRows();
@@ -355,6 +768,11 @@ async function deleteChannel(id) {
     channelsMsg.textContent = "Canal eliminado";
   }
   showSavedToast("Canal eliminado correctamente");
+  return {
+    ok: true,
+    action: "deleted",
+    detail: summarizeChannelChanges(before, null, "deleted"),
+  };
 }
 
 async function loadProfiles() {
@@ -452,9 +870,16 @@ async function loadPresets() {
 
 async function createPreset() {
   const payload = presetPayload();
+  const previousPresets = (presets || []).slice();
+  const prevIds = new Set(previousPresets.map((x) => Number(x.id)));
   if (!payload.name || !payload.mt5_terminal_path || !Number.isFinite(payload.mt5_login) || payload.mt5_login <= 0 || !payload.mt5_server || !Number.isFinite(payload.execution_profile_id) || payload.execution_profile_id <= 0) {
     presetMsg.textContent = "Completa nombre/path/login/server/perfil";
-    return;
+    return { ok: false, error: "Datos incompletos" };
+  }
+  const realValidation = validateRealPresetSelection(payload, null);
+  if (!realValidation.ok) {
+    presetMsg.textContent = realValidation.message;
+    return { ok: false, error: realValidation.message };
   }
   const res = await fetch("/api/operator-presets", {
     method: "POST",
@@ -464,21 +889,38 @@ async function createPreset() {
   const data = await readJson(res);
   if (!res.ok) {
     presetMsg.textContent = data.detail || "No se pudo crear";
-    return;
+    return { ok: false, error: data.detail || "No se pudo crear" };
   }
   presets = data.presets || [];
   renderPresetRows();
   fillAssignmentSelects();
+  const created = presets.find((p) => !prevIds.has(Number(p.id)))
+    || presets.find((p) => String(p.name || "").trim() === payload.name);
+  if (!created) {
+    presetMsg.textContent = "Guardado parcial: no se pudo verificar el preset recién creado";
+    return { ok: false, error: "No se pudo verificar el preset creado" };
+  }
   presetMsg.textContent = "Preset creado";
-  showSavedToast("Preset guardado correctamente");
+  return {
+    ok: true,
+    action: "created",
+    preset: created,
+    detail: summarizePresetChanges(null, created, "created"),
+  };
 }
 
 async function updatePreset() {
   if (!selectedPresetId) {
     presetMsg.textContent = "Selecciona un preset";
-    return;
+    return { ok: false, error: "Sin preset seleccionado" };
   }
+  const before = presets.find((p) => Number(p.id) === Number(selectedPresetId)) || null;
   const payload = presetPayload();
+  const realValidation = validateRealPresetSelection(payload, selectedPresetId);
+  if (!realValidation.ok) {
+    presetMsg.textContent = realValidation.message;
+    return { ok: false, error: realValidation.message };
+  }
   const res = await fetch(`/api/operator-presets/${selectedPresetId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -487,24 +929,32 @@ async function updatePreset() {
   const data = await readJson(res);
   if (!res.ok) {
     presetMsg.textContent = data.detail || "No se pudo actualizar";
-    return;
+    return { ok: false, error: data.detail || "No se pudo actualizar" };
   }
   presets = data.presets || [];
   renderPresetRows();
   fillAssignmentSelects();
+  const updated = presets.find((p) => Number(p.id) === Number(selectedPresetId)) || null;
+  if (!updated) {
+    presetMsg.textContent = "Actualizado parcial: no se pudo verificar el preset";
+    return { ok: false, error: "No se pudo verificar el preset actualizado" };
+  }
   presetMsg.textContent = "Preset actualizado";
-  showSavedToast("Preset actualizado correctamente");
+  return {
+    ok: true,
+    action: "updated",
+    preset: updated,
+    detail: summarizePresetChanges(before, updated, "updated"),
+  };
 }
 
 async function deletePreset(id) {
-  if (!window.confirm("Seguro que quieres eliminar este canal/preset de operador?")) {
-    return;
-  }
+  const before = presets.find((p) => Number(p.id) === Number(id)) || null;
   const res = await fetch(`/api/operator-presets/${id}`, { method: "DELETE" });
   const data = await readJson(res);
   if (!res.ok) {
     presetMsg.textContent = data.detail || "No se pudo eliminar";
-    return;
+    return { ok: false, error: data.detail || "No se pudo eliminar" };
   }
   presets = data.presets || [];
   selectedPresetId = null;
@@ -513,129 +963,14 @@ async function deletePreset(id) {
   fillAssignmentSelects();
   await loadAssignments();
   presetMsg.textContent = "Preset eliminado";
-  showSavedToast("Preset eliminado correctamente");
-}
-
-function assignmentPayload() {
   return {
-    channel_id: Number(assignmentChannel.value),
-    config_id: Number(assignmentConfig.value),
-    mode: document.getElementById("assignment_mode").value,
-    is_active: document.getElementById("assignment_is_active").checked,
+    ok: true,
+    action: "deleted",
+    preset: before,
+    detail: before
+      ? `Se eliminó preset #${before.id} (${before.name}) con perfil ${before.execution_profile_code || "-"}.`
+      : `Se eliminó preset #${id}.`,
   };
-}
-
-function findRealAssignmentForChannel(channelId, ignoreAssignmentId = null) {
-  const cid = Number(channelId);
-  const ignoreId = ignoreAssignmentId == null ? null : Number(ignoreAssignmentId);
-  return assignments.find(
-    (a) =>
-      Number(a.channel_id) === cid &&
-      String(a.mode).toLowerCase() === "real" &&
-      (ignoreId == null || Number(a.id) !== ignoreId),
-  );
-}
-
-function findPresetById(id) {
-  const pid = Number(id);
-  return presets.find((p) => Number(p.id) === pid) || null;
-}
-
-function presetIsSwing(id) {
-  const p = findPresetById(id);
-  return !!p && String(p.execution_profile_code || "").toUpperCase() === "SWING";
-}
-
-async function createAssignment() {
-  const payload = assignmentPayload();
-  if (!Number.isFinite(payload.channel_id) || !Number.isFinite(payload.config_id)) {
-    assignmentMsg.textContent = "Selecciona canal y preset";
-    return;
-  }
-  if (String(payload.mode).toLowerCase() === "real") {
-    if (!presetIsSwing(payload.config_id)) {
-      assignmentMsg.textContent = "Modo real solo permitido con presets de perfil SWING.";
-      return;
-    }
-    const existing = findRealAssignmentForChannel(payload.channel_id);
-    if (existing) {
-      assignmentMsg.textContent = `No permitido: ya existe 1 modo real para este canal (#${existing.id}, ${existing.preset_name || existing.config_name}).`;
-      return;
-    }
-  }
-  const res = await fetch("/api/assignments", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await readJson(res);
-  if (!res.ok) {
-    assignmentMsg.textContent = data.detail || "No se pudo crear asignación";
-    return;
-  }
-  assignments = data.assignments || [];
-  renderAssignmentRows();
-  assignmentMsg.textContent = "Asignación creada";
-  showSavedToast("Asignación guardada correctamente");
-}
-
-async function updateAssignment() {
-  if (!selectedAssignmentId) {
-    assignmentMsg.textContent = "Selecciona una asignación";
-    return;
-  }
-  const nextMode = document.getElementById("assignment_mode").value;
-  const current = assignments.find((x) => x.id === selectedAssignmentId);
-  if (!current) {
-    assignmentMsg.textContent = "Asignación seleccionada no encontrada";
-    return;
-  }
-  if (String(nextMode).toLowerCase() === "real") {
-    if (!presetIsSwing(current.config_id)) {
-      assignmentMsg.textContent = "Modo real solo permitido con presets de perfil SWING.";
-      return;
-    }
-    const existing = findRealAssignmentForChannel(current.channel_id, selectedAssignmentId);
-    if (existing) {
-      assignmentMsg.textContent = `No permitido: ya existe 1 modo real para este canal (#${existing.id}, ${existing.preset_name || existing.config_name}).`;
-      return;
-    }
-  }
-  const payload = {
-    mode: nextMode,
-    is_active: document.getElementById("assignment_is_active").checked,
-  };
-  const res = await fetch(`/api/assignments/${selectedAssignmentId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await readJson(res);
-  if (!res.ok) {
-    assignmentMsg.textContent = data.detail || "No se pudo actualizar";
-    return;
-  }
-  assignments = data.assignments || [];
-  renderAssignmentRows();
-  assignmentMsg.textContent = "Asignación actualizada";
-  showSavedToast("Asignación actualizada correctamente");
-}
-
-async function deleteAssignment(id) {
-  if (!window.confirm("Seguro que quieres eliminar este canal/preset de operador?")) {
-    return;
-  }
-  const res = await fetch(`/api/assignments/${id}`, { method: "DELETE" });
-  const data = await readJson(res);
-  if (!res.ok) {
-    assignmentMsg.textContent = data.detail || "No se pudo eliminar";
-    return;
-  }
-  assignments = data.assignments || [];
-  selectedAssignmentId = null;
-  renderAssignmentRows();
-  assignmentMsg.textContent = "Asignación eliminada";
-  showSavedToast("Asignación eliminada correctamente");
 }
 
 async function loadAssignments() {
@@ -651,115 +986,148 @@ async function loadAssignments() {
   assignmentMsg.textContent = `${assignments.length} asignación(es)`;
 }
 
-async function seedCrossAssignments() {
-  if (!window.confirm("Esto creará el cruce completo Canal x Preset y ajustará 1 real activo por canal. ¿Continuar?")) {
+function openAssignmentDetails(assignmentId) {
+  const id = Number(assignmentId || 0);
+  if (id <= 0) {
     return;
   }
-  assignmentMsg.textContent = "Generando cruce Canal x Preset...";
-  const res = await fetch("/api/assignments/seed-cross-product", { method: "POST" });
-  const data = await readJson(res);
-  if (!res.ok) {
-    assignmentMsg.textContent = data.detail || "No se pudo generar el cruce";
-    return;
-  }
-  assignments = data.assignments || [];
-  renderAssignmentRows();
-  const r = data.result || {};
-  assignmentMsg.textContent = `Cruce generado: ${r.expected_pairs || 0} pares (creadas ${r.created || 0}, actualizadas ${r.updated || 0})`;
-  showSavedToast("Cruce Canal x Preset guardado");
-}
-
-function renderChannelPresetSearchRows(items) {
-  if (!cpSearchResults) {
-    return;
-  }
-  cpSearchResults.innerHTML = "";
-  const rows = items || [];
-  if (!rows.length) {
-    cpSearchResults.innerHTML = '<tr><td colspan="8" class="empty">Sin resultados</td></tr>';
-    return;
-  }
-  for (const it of rows) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${it.assignment_id}</td>
-      <td>${it.channel_name}.${it.preset_name}</td>
-      <td>${it.current_mode || "-"}</td>
-      <td>${it.current_is_active ? "si" : "no"}</td>
-      <td>${it.first_seen || "-"}</td>
-      <td>${it.last_seen || "-"}</td>
-      <td>${it.events_count || 0}</td>
-      <td><a href="/canal-presets?id=${it.assignment_id}" target="_blank" rel="noopener">Abrir</a></td>
-    `;
-    cpSearchResults.appendChild(tr);
-  }
-}
-
-function buildChannelPresetRegistryQuery() {
-  const params = new URLSearchParams();
-  const id = Number(cpSearchId ? cpSearchId.value : 0);
-  if (Number.isFinite(id) && id > 0) {
-    params.set("assignment_id", String(id));
-  }
-  const fromIso = toIsoForApi(cpSearchFrom ? cpSearchFrom.value : "", false);
-  const toIso = toIsoForApi(cpSearchTo ? cpSearchTo.value : "", true);
-  if (fromIso) {
-    params.set("from_ts", fromIso);
-  }
-  if (toIso) {
-    params.set("to_ts", toIso);
-  }
-  return params;
-}
-
-async function runChannelPresetSearch(openFirst = false) {
-  if (!cpSearchMsg) {
-    return;
-  }
-  cpSearchMsg.textContent = "Buscando...";
-  const params = buildChannelPresetRegistryQuery();
-  const res = await fetch(`/api/channel-presets/registry?${params.toString()}`);
-  const data = await readJson(res);
-  if (!res.ok) {
-    cpSearchMsg.textContent = data.detail || "Error de búsqueda";
-    return;
-  }
-  const items = data.items || [];
-  renderChannelPresetSearchRows(items);
-  cpSearchMsg.textContent = `${items.length} resultado(s)`;
-  if (openFirst && items.length > 0) {
-    const firstId = Number(items[0].assignment_id || 0);
-    if (firstId > 0) {
-      const detailParams = new URLSearchParams();
-      detailParams.set("id", String(firstId));
-      const fromIso = toIsoForApi(cpSearchFrom ? cpSearchFrom.value : "", false);
-      const toIso = toIsoForApi(cpSearchTo ? cpSearchTo.value : "", true);
-      if (fromIso) {
-        detailParams.set("from_ts", fromIso);
-      }
-      if (toIso) {
-        detailParams.set("to_ts", toIso);
-      }
-      window.open(`/canal-presets?${detailParams.toString()}`, "_blank");
-    }
-  }
+  window.open(`/canal-presets?id=${id}`, "_blank");
 }
 
 function initActions() {
-  const saveChannelBtn = document.getElementById("save-channel");
-  const clearChannelBtn = document.getElementById("clear-channel");
   const refreshChannelsBtn = document.getElementById("refresh-channels");
-  if (saveChannelBtn && clearChannelBtn && refreshChannelsBtn && channelsBody) {
-    saveChannelBtn.addEventListener("click", saveChannel);
-    clearChannelBtn.addEventListener("click", () => {
-      setChannelForm();
-      if (channelsMsg) {
-        channelsMsg.textContent = "Formulario limpio";
+  if (channelSaveConfirmAcceptBtn) {
+    channelSaveConfirmAcceptBtn.addEventListener("click", async () => {
+      const result = await persistChannel();
+      closeChannelSaveConfirmModal();
+      if (!result || !result.ok) {
+        return;
+      }
+      closeChannelModal();
+      openChannelSuccessModal(result.detail, result.action);
+    });
+  }
+  if (channelSaveConfirmCancelBtn) {
+    channelSaveConfirmCancelBtn.addEventListener("click", () => {
+      closeChannelSaveConfirmModal();
+    });
+  }
+  if (channelSuccessCloseBtn) {
+    channelSuccessCloseBtn.addEventListener("click", () => {
+      closeChannelSuccessModal();
+    });
+  }
+  if (channelDeleteCancelBtn) {
+    channelDeleteCancelBtn.addEventListener("click", () => {
+      closeChannelDeleteModal();
+    });
+  }
+  if (channelDeleteConfirmBtn) {
+    channelDeleteConfirmBtn.addEventListener("click", async () => {
+      const id = Number(pendingDeleteChannelId || 0);
+      if (id <= 0) {
+        if (channelDeleteMsg) {
+          channelDeleteMsg.textContent = "Canal inválido para eliminar.";
+        }
+        return;
+      }
+      const pwd = channelDeletePassword ? String(channelDeletePassword.value || "").trim() : "";
+      if (!pwd) {
+        if (channelDeleteMsg) {
+          channelDeleteMsg.textContent = "Ingresa la contraseña para confirmar.";
+        }
+        return;
+      }
+      if (channelDeleteMsg) {
+        channelDeleteMsg.textContent = "Verificando contraseña...";
+      }
+      const authCheck = await verifyWebPassword(pwd);
+      if (!authCheck.ok) {
+        if (channelDeleteMsg) {
+          channelDeleteMsg.textContent = authCheck.error || "Contraseña incorrecta";
+        }
+        return;
+      }
+      if (channelDeleteMsg) {
+        channelDeleteMsg.textContent = "Eliminando canal...";
+      }
+      const result = await deleteChannel(id);
+      if (!result || !result.ok) {
+        if (channelDeleteMsg) {
+          channelDeleteMsg.textContent = result?.error || "No se pudo eliminar";
+        }
+        return;
+      }
+      closeChannelDeleteModal();
+      openChannelSuccessModal(result.detail, "deleted");
+    });
+  }
+  if (channelSaveConfirmModal) {
+    channelSaveConfirmModal.addEventListener("click", (event) => {
+      if (event.target === channelSaveConfirmModal) {
+        closeChannelSaveConfirmModal();
       }
     });
-    refreshChannelsBtn.addEventListener("click", loadChannels);
+  }
+  if (channelSuccessModal) {
+    channelSuccessModal.addEventListener("click", (event) => {
+      if (event.target === channelSuccessModal) {
+        closeChannelSuccessModal();
+      }
+    });
+  }
+  if (channelDeleteModal) {
+    channelDeleteModal.addEventListener("click", (event) => {
+      if (event.target === channelDeleteModal) {
+        closeChannelDeleteModal();
+      }
+    });
+  }
 
-    channelsBody.addEventListener("click", async (event) => {
+  if (profilesOpenModalBtn) {
+    profilesOpenModalBtn.addEventListener("click", async () => {
+      openProfilesModal();
+      await loadProfiles();
+    });
+  }
+  if (profilesModalCloseBtn) {
+    profilesModalCloseBtn.addEventListener("click", () => {
+      closeProfilesModal();
+    });
+  }
+  if (profilesModal) {
+    profilesModal.addEventListener("click", (event) => {
+      if (event.target === profilesModal) {
+        closeProfilesModal();
+      }
+    });
+  }
+
+  if (channelOpenCreateBtn) {
+    channelOpenCreateBtn.addEventListener("click", () => {
+      openChannelModal("create");
+    });
+  }
+  if (channelModalSaveBtn) {
+    channelModalSaveBtn.addEventListener("click", saveChannel);
+  }
+  if (channelModalCancelBtn) {
+    channelModalCancelBtn.addEventListener("click", () => {
+      closeChannelModal();
+    });
+  }
+  if (channelModal) {
+    channelModal.addEventListener("click", (event) => {
+      if (event.target === channelModal) {
+        closeChannelModal();
+      }
+    });
+  }
+  if (refreshChannelsBtn) {
+    refreshChannelsBtn.addEventListener("click", loadChannels);
+  }
+  if (channelsBody) {
+    channelsBody.addEventListener("click", (event) => {
       const btn = event.target.closest("button[data-action]");
       if (!btn) {
         return;
@@ -769,36 +1137,18 @@ function initActions() {
         return;
       }
       if (btn.dataset.action === "delete-channel") {
-        await deleteChannel(id);
+        openChannelDeleteModal(id);
         return;
       }
       if (btn.dataset.action === "edit-channel") {
-        const channel = channels.find((c) => c.id === id);
+        const channel = channels.find((c) => Number(c.id) === id);
         if (channel) {
-          setChannelForm(channel);
+          openChannelModal("edit", channel);
           if (channelsMsg) {
             channelsMsg.textContent = `Editando canal #${id}`;
           }
         }
       }
-    });
-  }
-
-  const cpSearchBtn = document.getElementById("cp-search-btn");
-  const cpSearchClearBtn = document.getElementById("cp-search-clear");
-  if (cpSearchBtn && cpSearchClearBtn) {
-    cpSearchBtn.addEventListener("click", () => runChannelPresetSearch(true));
-    cpSearchClearBtn.addEventListener("click", () => {
-      if (cpSearchId) {
-        cpSearchId.value = "";
-      }
-      if (cpSearchFrom) {
-        cpSearchFrom.value = "";
-      }
-      if (cpSearchTo) {
-        cpSearchTo.value = "";
-      }
-      runChannelPresetSearch(false);
     });
   }
 
@@ -836,16 +1186,158 @@ function initActions() {
     }
   });
 
-  document.getElementById("preset-create").addEventListener("click", createPreset);
-  document.getElementById("preset-update").addEventListener("click", updatePreset);
-  document.getElementById("preset-delete").addEventListener("click", () => {
-    if (!selectedPresetId) {
-      presetMsg.textContent = "Selecciona un preset";
+  if (presetOpenCreateBtn) {
+    presetOpenCreateBtn.addEventListener("click", () => {
+      openPresetModal("create");
+    });
+  }
+  if (presetRefreshBtn) {
+    presetRefreshBtn.addEventListener("click", loadPresets);
+  }
+  if (presetModalSaveBtn) {
+    presetModalSaveBtn.addEventListener("click", () => {
+      openPresetSaveConfirmModal(presetModalMode);
+    });
+  }
+  if (presetModalCancelBtn) {
+    presetModalCancelBtn.addEventListener("click", () => {
+      closePresetModal();
+    });
+  }
+  if (presetSaveConfirmAcceptBtn) {
+    presetSaveConfirmAcceptBtn.addEventListener("click", async () => {
+      const result = pendingPresetSaveMode === "edit" ? await updatePreset() : await createPreset();
+      closePresetSaveConfirmModal();
+      if (!result || !result.ok) {
+        return;
+      }
+      closePresetModal();
+      openPresetSuccessModal(result.detail);
+    });
+  }
+  if (presetSaveConfirmCancelBtn) {
+    presetSaveConfirmCancelBtn.addEventListener("click", () => {
+      closePresetSaveConfirmModal();
+    });
+  }
+  if (presetSuccessCloseBtn) {
+    presetSuccessCloseBtn.addEventListener("click", () => {
+      closePresetSuccessModal();
+    });
+  }
+  if (presetDeleteCancelBtn) {
+    presetDeleteCancelBtn.addEventListener("click", () => {
+      closePresetDeleteModal();
+    });
+  }
+  if (presetDeleteConfirmBtn) {
+    presetDeleteConfirmBtn.addEventListener("click", async () => {
+      const id = Number(pendingDeletePresetId || 0);
+      if (id <= 0) {
+        if (presetDeleteMsg) {
+          presetDeleteMsg.textContent = "Preset inválido para eliminar.";
+        }
+        return;
+      }
+      const pwd = presetDeletePassword ? String(presetDeletePassword.value || "").trim() : "";
+      if (!pwd) {
+        if (presetDeleteMsg) {
+          presetDeleteMsg.textContent = "Ingresa la contraseña para confirmar.";
+        }
+        return;
+      }
+      if (presetDeleteMsg) {
+        presetDeleteMsg.textContent = "Verificando contraseña...";
+      }
+      const authCheck = await verifyWebPassword(pwd);
+      if (!authCheck.ok) {
+        if (presetDeleteMsg) {
+          presetDeleteMsg.textContent = authCheck.error || "Contraseña incorrecta";
+        }
+        return;
+      }
+      if (presetDeleteMsg) {
+        presetDeleteMsg.textContent = "Eliminando preset...";
+      }
+      const result = await deletePreset(id);
+      if (!result || !result.ok) {
+        if (presetDeleteMsg) {
+          presetDeleteMsg.textContent = result?.error || "No se pudo eliminar";
+        }
+        return;
+      }
+      closePresetDeleteModal();
+      openPresetSuccessModal(result.detail);
+    });
+  }
+  if (presetModal) {
+    presetModal.addEventListener("click", (event) => {
+      if (event.target === presetModal) {
+        closePresetModal();
+      }
+    });
+  }
+  if (presetSaveConfirmModal) {
+    presetSaveConfirmModal.addEventListener("click", (event) => {
+      if (event.target === presetSaveConfirmModal) {
+        closePresetSaveConfirmModal();
+      }
+    });
+  }
+  if (presetSuccessModal) {
+    presetSuccessModal.addEventListener("click", (event) => {
+      if (event.target === presetSuccessModal) {
+        closePresetSuccessModal();
+      }
+    });
+  }
+  if (presetDeleteModal) {
+    presetDeleteModal.addEventListener("click", (event) => {
+      if (event.target === presetDeleteModal) {
+        closePresetDeleteModal();
+      }
+    });
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") {
       return;
     }
-    deletePreset(selectedPresetId);
+    if (isModalOpen(profilesModal)) {
+      closeProfilesModal();
+      return;
+    }
+    if (isModalOpen(channelDeleteModal)) {
+      closeChannelDeleteModal();
+      return;
+    }
+    if (isModalOpen(channelSuccessModal)) {
+      closeChannelSuccessModal();
+      return;
+    }
+    if (isModalOpen(channelSaveConfirmModal)) {
+      closeChannelSaveConfirmModal();
+      return;
+    }
+    if (isModalOpen(channelModal)) {
+      closeChannelModal();
+      return;
+    }
+    if (isModalOpen(presetDeleteModal)) {
+      closePresetDeleteModal();
+      return;
+    }
+    if (isModalOpen(presetSuccessModal)) {
+      closePresetSuccessModal();
+      return;
+    }
+    if (isModalOpen(presetSaveConfirmModal)) {
+      closePresetSaveConfirmModal();
+      return;
+    }
+    if (isModalOpen(presetModal)) {
+      closePresetModal();
+    }
   });
-  document.getElementById("preset-refresh").addEventListener("click", loadPresets);
 
   presetsBody.addEventListener("click", (event) => {
     const btn = event.target.closest("button[data-action]");
@@ -857,36 +1349,22 @@ function initActions() {
       return;
     }
     if (btn.dataset.action === "delete-preset") {
-      deletePreset(id);
+      openPresetDeleteModal(id);
       return;
     }
     if (btn.dataset.action === "edit-preset") {
       const preset = presets.find((x) => x.id === id);
       if (preset) {
-        selectedPresetId = id;
-        setPresetForm(preset);
+        openPresetModal("edit", preset);
         presetMsg.textContent = `Editando preset #${id}`;
       }
     }
   });
 
-  document.getElementById("assignment-create").addEventListener("click", createAssignment);
-  document.getElementById("assignment-seed-cross").addEventListener("click", seedCrossAssignments);
-  document.getElementById("assignment-update").addEventListener("click", updateAssignment);
-  document.getElementById("assignment-delete").addEventListener("click", () => {
-    if (!selectedAssignmentId) {
-      assignmentMsg.textContent = "Selecciona una asignación";
-      return;
-    }
-    deleteAssignment(selectedAssignmentId);
-  });
-  document.getElementById("assignment-refresh").addEventListener("click", loadAssignments);
-  document.getElementById("assignment_mode").addEventListener("change", () => {
-    const mode = document.getElementById("assignment_mode").value;
-    if (String(mode).toLowerCase() === "real") {
-      assignmentMsg.textContent = "Advertencia: solo se permite 1 asignación real por canal y debe ser preset SWING.";
-    }
-  });
+  const assignmentRefreshBtn = document.getElementById("assignment-refresh");
+  if (assignmentRefreshBtn) {
+    assignmentRefreshBtn.addEventListener("click", loadAssignments);
+  }
 
   assignmentsBody.addEventListener("click", (event) => {
     const btn = event.target.closest("button[data-action]");
@@ -897,22 +1375,30 @@ function initActions() {
     if (!id) {
       return;
     }
-    if (btn.dataset.action === "delete-assignment") {
-      deleteAssignment(id);
-      return;
-    }
-    if (btn.dataset.action === "edit-assignment") {
-      const a = assignments.find((x) => x.id === id);
-      if (a) {
-        selectedAssignmentId = id;
-        assignmentChannel.value = String(a.channel_id);
-        assignmentConfig.value = String(a.config_id);
-        document.getElementById("assignment_mode").value = a.mode;
-        document.getElementById("assignment_is_active").checked = !!a.is_active;
-        assignmentMsg.textContent = `Editando asignación #${id}`;
-      }
+    if (btn.dataset.action === "details-assignment") {
+      openAssignmentDetails(id);
     }
   });
+
+  const presetIsDefaultInput = document.getElementById("preset_is_default");
+  if (presetIsDefaultInput) {
+    presetIsDefaultInput.addEventListener("change", () => {
+      if (!presetIsDefaultInput.checked) {
+        return;
+      }
+      const validation = validateRealPresetSelection(
+        {
+          execution_profile_id: Number(presetExecutionProfile.value),
+          is_default: true,
+        },
+        presetModalMode === "edit" ? selectedPresetId : null,
+      );
+      if (!validation.ok) {
+        presetIsDefaultInput.checked = false;
+        presetMsg.textContent = validation.message;
+      }
+    });
+  }
 }
 
 async function init() {
@@ -923,7 +1409,6 @@ async function init() {
   await loadProfiles();
   await loadPresets();
   await loadAssignments();
-  await runChannelPresetSearch(false);
 }
 
 init();

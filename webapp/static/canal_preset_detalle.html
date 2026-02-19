@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Trading Bot - Detalle Canal.Preset</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260218h" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260219b" />
   </head>
   <body>
     <div class="noise"></div>
@@ -38,61 +38,49 @@
       <section class="panel">
         <header class="panel-header">
           <div>
-            <h2>Buscador</h2>
-            <p>Buscar por ID de asignación y/o rango de fechas.</p>
-          </div>
-          <span class="hint-inline" id="search-msg">Listo</span>
-        </header>
-        <div class="form-grid channels-grid">
-          <label>
-            ID Canal.Preset
-            <input id="cp-id" type="number" inputmode="numeric" placeholder="Ej: 12" />
-          </label>
-          <label>
-            Desde (fecha y hora)
-            <input id="cp-from-ts" type="datetime-local" step="1" />
-          </label>
-          <label>
-            Hasta (fecha y hora)
-            <input id="cp-to-ts" type="datetime-local" step="1" />
-          </label>
-          <div class="actions">
-            <button class="btn primary" id="cp-search" type="button">Buscar</button>
-            <button class="btn ghost" id="cp-clear" type="button">Limpiar</button>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Canal.Preset</th>
-                <th>Modo actual</th>
-                <th>Activo</th>
-                <th>Primer evento</th>
-                <th>Último evento</th>
-                <th>Eventos</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody id="registry-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel">
-        <header class="panel-header">
-          <div>
             <h2>Resumen del ID seleccionado</h2>
           </div>
           <span class="hint-inline" id="detail-msg">Sin selección</span>
         </header>
+        <div class="actions">
+          <button class="btn ghost" id="cp-toggle-active" type="button" disabled>activar</button>
+          <span class="hint-inline" id="cp-toggle-msg">Selecciona un Canal.Preset para gestionar estado.</span>
+        </div>
         <div class="table-wrap">
           <table>
             <tbody id="meta-body"></tbody>
           </table>
         </div>
       </section>
+
+      <div class="modal-overlay hidden" id="cp-toggle-block-modal" role="dialog" aria-modal="true" aria-labelledby="cp-toggle-block-title" hidden>
+        <div class="panel modal-panel modal-panel-mini">
+          <header class="panel-header">
+            <div>
+              <h2 id="cp-toggle-block-title">No se puede desactivar Canal.Preset</h2>
+            </div>
+          </header>
+          <p id="cp-toggle-block-text" class="modal-detail-text">Canal.Preset tiene operación abierta, por favor ciérrala antes de desactivar este Canal.Preset.</p>
+          <div class="actions">
+            <button class="btn primary" id="cp-toggle-block-ok" type="button">OK</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-overlay hidden" id="cp-toggle-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cp-toggle-confirm-title" hidden>
+        <div class="panel modal-panel modal-panel-mini">
+          <header class="panel-header">
+            <div>
+              <h2 id="cp-toggle-confirm-title">Confirmar cambio de estado</h2>
+            </div>
+          </header>
+          <p id="cp-toggle-confirm-text" class="modal-detail-text">Confirma la acción sobre Canal.Preset.</p>
+          <div class="actions">
+            <button class="btn primary" id="cp-toggle-confirm-accept" type="button">Confirmar</button>
+            <button class="btn ghost" id="cp-toggle-confirm-cancel" type="button">Cancelar</button>
+          </div>
+        </div>
+      </div>
 
       <section class="panel">
         <header class="panel-header">
@@ -192,8 +180,8 @@
         </details>
       </section>
     </main>
-    <script src="/static/ui.js"></script>
-    <script src="/static/canal_preset_detalle.js"></script>
+    <script src="/static/ui.js?v=20260219b"></script>
+    <script src="/static/canal_preset_detalle.js?v=20260219c"></script>
   </body>
 </html>
 

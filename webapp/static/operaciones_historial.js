@@ -93,7 +93,7 @@ function filters() {
 function renderRows(items) {
   resultsBody.innerHTML = "";
   if (!items || !items.length) {
-    resultsBody.innerHTML = '<tr><td colspan="13" class="empty">Sin resultados</td></tr>';
+    resultsBody.innerHTML = '<tr><td colspan="11" class="empty">Sin resultados</td></tr>';
     return;
   }
   for (const it of items) {
@@ -109,8 +109,6 @@ function renderRows(items) {
       <td>${fmtNum(it.pnl_pips ?? it.last_pips)}</td>
       <td>${fmtNum(it.pnl_usd ?? it.last_profit_usd)}</td>
       <td>${it.close_source || "-"}</td>
-      <td>${it.close_trigger_message_id || "-"}</td>
-      <td>${it.close_error_id || "-"}</td>
       <td><a class="mini-btn" target="_blank" href="/operaciones/${it.id}">Ver</a></td>
     `;
     resultsBody.appendChild(tr);

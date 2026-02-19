@@ -96,7 +96,7 @@ function renderClosedRows(items) {
   closedBody.innerHTML = "";
   if (!items || !items.length) {
     const tr = document.createElement("tr");
-    tr.innerHTML = '<td colspan="13" class="empty">Sin operaciones registradas</td>';
+    tr.innerHTML = '<td colspan="11" class="empty">Sin operaciones registradas</td>';
     closedBody.appendChild(tr);
     return;
   }
@@ -113,8 +113,6 @@ function renderClosedRows(items) {
       <td>${fmtNum(it.pnl_pips ?? it.last_pips)}</td>
       <td>${fmtNum(it.pnl_usd ?? it.last_profit_usd)}</td>
       <td>${it.close_source || "-"}</td>
-      <td>${it.close_trigger_message_id || "-"}</td>
-      <td>${it.close_error_id || "-"}</td>
       <td><a class="mini-btn" target="_blank" href="/operaciones/${it.id}">Ver</a></td>
     `;
     closedBody.appendChild(tr);

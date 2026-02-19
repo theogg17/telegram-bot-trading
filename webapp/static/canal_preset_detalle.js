@@ -7,6 +7,15 @@ const cpFromInput = document.getElementById("cp-from-ts");
 const cpToInput = document.getElementById("cp-to-ts");
 const cpSearchBtn = document.getElementById("cp-search");
 const cpClearBtn = document.getElementById("cp-clear");
+const cpToggleActiveBtn = document.getElementById("cp-toggle-active");
+const cpToggleMsg = document.getElementById("cp-toggle-msg");
+const cpToggleBlockModal = document.getElementById("cp-toggle-block-modal");
+const cpToggleBlockText = document.getElementById("cp-toggle-block-text");
+const cpToggleBlockOkBtn = document.getElementById("cp-toggle-block-ok");
+const cpToggleConfirmModal = document.getElementById("cp-toggle-confirm-modal");
+const cpToggleConfirmText = document.getElementById("cp-toggle-confirm-text");
+const cpToggleConfirmAcceptBtn = document.getElementById("cp-toggle-confirm-accept");
+const cpToggleConfirmCancelBtn = document.getElementById("cp-toggle-confirm-cancel");
 
 const registryBody = document.getElementById("registry-body");
 const metaBody = document.getElementById("meta-body");
@@ -29,7 +38,7 @@ const pipsChart = document.getElementById("cp-pips-chart");
 const pipsCtx = pipsChart ? pipsChart.getContext("2d") : null;
 
 let currentAssignmentId = null;
-const PERIODS_PAGE_SIZE = 3;
+const PERIODS_PAGE_SIZE = 15;
 const OPERATIONS_PAGE_SIZE = 6;
 const MODS_PAGE_SIZE = 6;
 let periodsSorted = [];
@@ -41,6 +50,8 @@ let operationsTotalPages = 1;
 let modsSorted = [];
 let modsPage = 1;
 let modsTotalPages = 1;
+let currentAssignmentMeta = null;
+let pendingToggleTargetActive = null;
 
 async function readJson(res) {
   try {
@@ -83,14 +94,112 @@ function fmtNum(v) {
   return Number.isFinite(Number(v)) ? Number(v).toFixed(2) : "-";
 }
 
+function openModal(modal) {
+  if (!modal) {
+    return;
+  }
+  modal.hidden = false;
+  modal.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+}
+
+function closeModal(modal) {
+  if (!modal) {
+    return;
+  }
+  modal.classList.add("hidden");
+  modal.hidden = true;
+  if (
+    (!cpToggleBlockModal || cpToggleBlockModal.hidden) &&
+    (!cpToggleConfirmModal || cpToggleConfirmModal.hidden)
+  ) {
+    document.body.classList.remove("modal-open");
+  }
+}
+
+function openToggleBlockedModal(message) {
+  if (cpToggleBlockText) {
+    cpToggleBlockText.textContent = message || "Canal.Preset tiene operación abierta, por favor ciérrala antes de desactivar este Canal.Preset.";
+  }
+  openModal(cpToggleBlockModal);
+}
+
+function closeToggleBlockedModal() {
+  closeModal(cpToggleBlockModal);
+}
+
+function openToggleConfirmModal(targetActive) {
+  pendingToggleTargetActive = !!targetActive;
+  if (cpToggleConfirmText) {
+    cpToggleConfirmText.textContent = pendingToggleTargetActive
+      ? "¿Confirmas activar este Canal.Preset?"
+      : "¿Confirmas desactivar este Canal.Preset?";
+  }
+  openModal(cpToggleConfirmModal);
+}
+
+function closeToggleConfirmModal() {
+  pendingToggleTargetActive = null;
+  closeModal(cpToggleConfirmModal);
+}
+
+function renderToggleControls(meta = null) {
+  currentAssignmentMeta = meta || null;
+  if (!cpToggleActiveBtn || !cpToggleMsg) {
+    return;
+  }
+  if (!meta || !currentAssignmentId) {
+    cpToggleActiveBtn.disabled = true;
+    cpToggleActiveBtn.textContent = "activar";
+    cpToggleMsg.textContent = "Selecciona un Canal.Preset para gestionar estado.";
+    return;
+  }
+  const isActive = !!meta.current_is_active;
+  cpToggleActiveBtn.textContent = isActive ? "desactivar" : "activar";
+  if (!meta.current_assignment_exists) {
+    cpToggleActiveBtn.disabled = true;
+    cpToggleMsg.textContent = "Este Canal.Preset ya no existe en asignaciones activas.";
+    return;
+  }
+  cpToggleActiveBtn.disabled = false;
+  cpToggleMsg.textContent = isActive
+    ? "Activo: procesa nuevas señales."
+    : "Inactivo: ignora nuevas señales.";
+}
+
+function periodEventLabel(eventType) {
+  const ev = String(eventType || "").toLowerCase();
+  if (ev === "activation") {
+    return "Activacion";
+  }
+  if (ev === "deactivation") {
+    return "Desactivacion";
+  }
+  if (ev === "created") {
+    return "Creacion";
+  }
+  if (ev === "deleted") {
+    return "Eliminacion";
+  }
+  if (ev === "updated") {
+    return "Actualizacion";
+  }
+  if (ev === "bootstrap") {
+    return "Bootstrap";
+  }
+  return eventType || "-";
+}
+
 function queryFromFilters(withPageId = null) {
   const params = new URLSearchParams();
-  const idVal = withPageId != null ? withPageId : Number(cpIdInput.value || 0);
+  const fallbackId = currentAssignmentId || 0;
+  const inputId = cpIdInput ? Number(cpIdInput.value || 0) : 0;
+  const idVal = withPageId != null ? withPageId : Number(inputId || fallbackId || 0);
   if (Number.isFinite(idVal) && idVal > 0) {
     params.set("assignment_id", String(idVal));
   }
-  const fromIso = toIsoForApi(cpFromInput.value, false);
-  const toIso = toIsoForApi(cpToInput.value, true);
+  const fromIso = toIsoForApi(cpFromInput ? cpFromInput.value : "", false);
+  const toIso = toIsoForApi(cpToInput ? cpToInput.value : "", true);
   if (fromIso) {
     params.set("from_ts", fromIso);
   }
@@ -101,6 +210,9 @@ function queryFromFilters(withPageId = null) {
 }
 
 function renderRegistry(items) {
+  if (!registryBody) {
+    return;
+  }
   registryBody.innerHTML = "";
   const rows = items || [];
   if (!rows.length) {
@@ -192,9 +304,11 @@ function renderMeta(detail) {
   metaBody.innerHTML = `
     <tr><th>ID Canal.Preset</th><td>${detail.assignment_id || "-"}</td></tr>
     <tr><th>Canal.Preset</th><td>${meta.channel_name || "-"}.${meta.preset_name || "-"}</td></tr>
+    <tr><th>Creado en</th><td>${fmtTs(meta.created_at)}</td></tr>
     <tr><th>Período registrado</th><td>${fmtTs(meta.first_seen)} -> ${fmtTs(meta.last_seen)}</td></tr>
     <tr><th>Eliminado en</th><td>${fmtTs(meta.deleted_at)}</td></tr>
     <tr><th>Modo/estado actual</th><td>${meta.current_mode || "-"} / ${meta.current_is_active ? "activa" : "inactiva"}</td></tr>
+    <tr><th>Operaciones abiertas actuales</th><td>${meta.current_open_operations || 0}</td></tr>
     <tr><th>Trades totales</th><td>${st.operations_total || 0}</td></tr>
     <tr><th>Cerradas / abiertas</th><td>${st.operations_closed || 0} / ${st.operations_open_pending || 0}</td></tr>
     <tr><th>Frecuencia trades/día</th><td>${fmtNum(st.frequency_trades_per_day)}</td></tr>
@@ -269,7 +383,7 @@ function renderPeriodsPage() {
       <td>${fmtTs(p.end_ts)}</td>
       <td>${p.mode || "-"}</td>
       <td>${p.is_active ? "si" : "no"}</td>
-      <td>${p.event_type || "-"}</td>
+      <td>${periodEventLabel(p.event_type)}</td>
       <td>${p.details || "-"}</td>
     `;
     periodsBody.appendChild(tr);
@@ -388,16 +502,25 @@ function renderModsPage() {
 }
 
 async function loadRegistry() {
+  if (!registryBody) {
+    return;
+  }
   const qs = queryFromFilters();
-  searchMsg.textContent = "Buscando...";
+  if (searchMsg) {
+    searchMsg.textContent = "Buscando...";
+  }
   const res = await fetch(`/api/channel-presets/registry?${qs.toString()}`);
   const data = await readJson(res);
   if (!res.ok) {
-    searchMsg.textContent = data.detail || "Error de búsqueda";
+    if (searchMsg) {
+      searchMsg.textContent = data.detail || "Error de búsqueda";
+    }
     return;
   }
   renderRegistry(data.items || []);
-  searchMsg.textContent = `${data.count || 0} resultado(s)`;
+  if (searchMsg) {
+    searchMsg.textContent = `${data.count || 0} resultado(s)`;
+  }
 }
 
 async function loadDetail(assignmentId) {
@@ -416,6 +539,7 @@ async function loadDetail(assignmentId) {
   }
   currentAssignmentId = idNum;
   renderMeta(data);
+  renderToggleControls(data.meta || null);
   renderPeriods(data.periods || []);
   renderOperations(data.operations || []);
   renderMods(data.modifications || []);
@@ -424,27 +548,119 @@ async function loadDetail(assignmentId) {
   detailMsg.textContent = `Detalle cargado #${idNum}`;
 }
 
-function initActions() {
-  cpSearchBtn.addEventListener("click", () => {
-    loadRegistry();
-    const idNum = Number(cpIdInput.value || 0);
-    if (idNum > 0) {
-      loadDetail(idNum);
-    }
+async function toggleCurrentChannelPreset() {
+  if (!currentAssignmentId || !currentAssignmentMeta || !currentAssignmentMeta.current_assignment_exists) {
+    return;
+  }
+  const targetActive = pendingToggleTargetActive === null
+    ? !currentAssignmentMeta.current_is_active
+    : !!pendingToggleTargetActive;
+  if (cpToggleMsg) {
+    cpToggleMsg.textContent = targetActive ? "Activando Canal.Preset..." : "Desactivando Canal.Preset...";
+  }
+  const res = await fetch(`/api/channel-presets/${currentAssignmentId}/set-active`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_active: !!targetActive }),
   });
-  cpClearBtn.addEventListener("click", () => {
-    cpIdInput.value = "";
-    cpFromInput.value = "";
-    cpToInput.value = "";
-    currentAssignmentId = null;
-    loadRegistry();
-    detailMsg.textContent = "Sin selección";
-    metaBody.innerHTML = "";
-    renderPeriods([]);
-    renderOperations([]);
-    renderMods([]);
-    drawPnlSeries([]);
-    drawPipsSeries([]);
+  const data = await readJson(res);
+  if (!res.ok) {
+    const msg = data.detail || "No se pudo actualizar estado de Canal.Preset";
+    if (res.status === 409 && !targetActive) {
+      openToggleBlockedModal(msg);
+    }
+    if (cpToggleMsg) {
+      cpToggleMsg.textContent = msg;
+    }
+    return;
+  }
+  if (cpToggleMsg) {
+    cpToggleMsg.textContent = targetActive
+      ? "Canal.Preset activado correctamente."
+      : "Canal.Preset desactivado correctamente.";
+  }
+  await loadDetail(currentAssignmentId);
+}
+
+function initActions() {
+  if (cpSearchBtn) {
+    cpSearchBtn.addEventListener("click", () => {
+      loadRegistry();
+      const idNum = Number((cpIdInput && cpIdInput.value) || 0);
+      if (idNum > 0) {
+        loadDetail(idNum);
+      }
+    });
+  }
+  if (cpClearBtn) {
+    cpClearBtn.addEventListener("click", () => {
+      if (cpIdInput) {
+        cpIdInput.value = "";
+      }
+      if (cpFromInput) {
+        cpFromInput.value = "";
+      }
+      if (cpToInput) {
+        cpToInput.value = "";
+      }
+      currentAssignmentId = null;
+      loadRegistry();
+      detailMsg.textContent = "Sin selección";
+      metaBody.innerHTML = "";
+      renderPeriods([]);
+      renderOperations([]);
+      renderMods([]);
+      drawPnlSeries([]);
+      drawPipsSeries([]);
+      renderToggleControls(null);
+    });
+  }
+  if (cpToggleActiveBtn) {
+    cpToggleActiveBtn.addEventListener("click", () => {
+      if (!currentAssignmentMeta || !currentAssignmentMeta.current_assignment_exists) {
+        return;
+      }
+      const targetActive = !currentAssignmentMeta.current_is_active;
+      openToggleConfirmModal(targetActive);
+    });
+  }
+  if (cpToggleBlockOkBtn) {
+    cpToggleBlockOkBtn.addEventListener("click", closeToggleBlockedModal);
+  }
+  if (cpToggleBlockModal) {
+    cpToggleBlockModal.addEventListener("click", (event) => {
+      if (event.target === cpToggleBlockModal) {
+        closeToggleBlockedModal();
+      }
+    });
+  }
+  if (cpToggleConfirmAcceptBtn) {
+    cpToggleConfirmAcceptBtn.addEventListener("click", async () => {
+      await toggleCurrentChannelPreset();
+      closeToggleConfirmModal();
+    });
+  }
+  if (cpToggleConfirmCancelBtn) {
+    cpToggleConfirmCancelBtn.addEventListener("click", closeToggleConfirmModal);
+  }
+  if (cpToggleConfirmModal) {
+    cpToggleConfirmModal.addEventListener("click", (event) => {
+      if (event.target === cpToggleConfirmModal) {
+        closeToggleConfirmModal();
+      }
+    });
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    if (cpToggleConfirmModal && !cpToggleConfirmModal.hidden) {
+      closeToggleConfirmModal();
+      return;
+    }
+    if (cpToggleBlockModal && !cpToggleBlockModal.hidden) {
+      closeToggleBlockedModal();
+    }
   });
   if (periodsPrevBtn) {
     periodsPrevBtn.addEventListener("click", () => {
@@ -494,21 +710,26 @@ function initActions() {
       }
     });
   }
-  registryBody.addEventListener("click", (event) => {
-    const btn = event.target.closest("button[data-action='open-detail']");
-    if (!btn) {
-      return;
-    }
-    const id = Number(btn.dataset.id || 0);
-    if (id > 0) {
-      cpIdInput.value = String(id);
-      loadDetail(id);
-    }
-  });
+  if (registryBody) {
+    registryBody.addEventListener("click", (event) => {
+      const btn = event.target.closest("button[data-action='open-detail']");
+      if (!btn) {
+        return;
+      }
+      const id = Number(btn.dataset.id || 0);
+      if (id > 0) {
+        if (cpIdInput) {
+          cpIdInput.value = String(id);
+        }
+        loadDetail(id);
+      }
+    });
+  }
 }
 
 async function init() {
   initActions();
+  renderToggleControls(null);
   try {
     const statusRes = await fetch("/api/status");
     const statusData = await readJson(statusRes);
@@ -523,25 +744,27 @@ async function init() {
   const pId = Number(params.get("id") || 0);
   const pFrom = params.get("from_ts") || "";
   const pTo = params.get("to_ts") || "";
-  if (pFrom) {
+  if (pFrom && cpFromInput) {
     const dt = new Date(pFrom);
     if (!Number.isNaN(dt.getTime())) {
       cpFromInput.value = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}T${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}:${String(dt.getSeconds()).padStart(2, "0")}`;
     }
   }
-  if (pTo) {
+  if (pTo && cpToInput) {
     const dt = new Date(pTo);
     if (!Number.isNaN(dt.getTime())) {
       cpToInput.value = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}T${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}:${String(dt.getSeconds()).padStart(2, "0")}`;
     }
   }
-  if (pId > 0) {
+  if (pId > 0 && cpIdInput) {
     cpIdInput.value = String(pId);
   }
   await loadRegistry();
   if (pId > 0) {
     await loadDetail(pId);
   } else {
+    detailMsg.textContent = "Abre esta vista desde Asignaciones Canal.Preset > Detalles.";
+    metaBody.innerHTML = '<tr><td class="empty">Sin Canal.Preset seleccionado.</td></tr>';
     drawPnlSeries([]);
     drawPipsSeries([]);
   }

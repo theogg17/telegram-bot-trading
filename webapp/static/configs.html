@@ -1,10 +1,10 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="es">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Trading Bot - Presets</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260218h" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260219b" />
   </head>
   <body>
     <div class="noise"></div>
@@ -34,68 +34,118 @@
         <a class="nav-link" href="/tutorial">Tutorial</a>
       </nav>
 
-      <section class="panel channels-panel">
+      <section class="panel">
         <header class="panel-header">
           <div>
-            <h2>Canales de Telegram</h2>
-            <p>Se guardan en SQLite y se cargan al iniciar el Lector.</p>
+            <h2>Asignaciones Canal.Preset</h2>
+            <p>Se crean y eliminan automáticamente al crear/editar/eliminar canales o presets.</p>
           </div>
-          <span class="hint-inline" id="channels-msg">Listo</span>
+          <span class="hint-inline" id="assignment-msg">Listo</span>
         </header>
 
+        <div class="section-separator assignment-separator" aria-hidden="true">
+          <span>Asignaciones creadas</span>
+        </div>
+
+        <div class="actions">
+          <button class="btn ghost" id="assignment-refresh" type="button">Recargar</button>
+        </div>
+
         <div class="table-wrap">
-          <table id="channels-table">
+          <table>
             <thead>
               <tr>
                 <th>ID</th>
-                <th>Nombre</th>
-                <th>Chat ID</th>
-                <th>Identificador</th>
-                <th>Activo</th>
+                <th>Canal</th>
+                <th>Preset</th>
+                <th>Perfil</th>
+                <th>Modo</th>
+                <th>Activa</th>
                 <th>Acciones</th>
+                <th>Creada</th>
               </tr>
             </thead>
-            <tbody id="channels-body"></tbody>
+            <tbody id="assignments-body"></tbody>
           </table>
-        </div>
-
-        <form id="channel-form" class="form-grid channels-grid">
-          <input type="hidden" id="channel_id" />
-          <label>
-            Nombre del canal
-            <input id="channel_name" type="text" placeholder="TechnicalPips" required />
-          </label>
-          <label>
-            Chat ID
-            <input id="channel_chat_id" type="text" placeholder="-1001234567890" required />
-          </label>
-          <label>
-            ID externo (opcional)
-            <input id="channel_external_id" type="text" placeholder="@alias / slug / nota" />
-          </label>
-          <label class="checkbox">
-            <input id="channel_is_active" type="checkbox" checked />
-            Canal activo
-          </label>
-        </form>
-
-        <div class="actions">
-          <button class="btn primary" id="save-channel" type="button">Guardar canal</button>
-          <button class="btn ghost" id="clear-channel" type="button">Limpiar formulario</button>
-          <button class="btn ghost" id="refresh-channels" type="button">Recargar lista</button>
         </div>
       </section>
 
       <section class="panel channels-panel">
         <header class="panel-header">
           <div>
-            <h2>Perfiles de Ejecución</h2>
-            <p>Solo 2 perfiles permitidos: SCALP y SWING. Cada preset usa 1 perfil.</p>
+            <h2>Presets del Operador</h2>
+            <p>Configuraciones predeterminadas para ejecutar y comparar.</p>
+            <div class="panel-subtitle-row">
+              <button class="btn primary btn-inline-compact" id="preset-open-create" type="button">Agregar preset</button>
+              <button class="btn ghost btn-inline-compact" id="profiles-open-modal" type="button">Perfiles de ejecución</button>
+              <button class="btn ghost btn-inline-compact" id="preset-refresh" type="button">Recargar presets</button>
+            </div>
           </div>
-          <span class="hint-inline" id="profile-msg">Listo</span>
+          <span class="hint-inline" id="preset-msg">Listo</span>
         </header>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Nombre</th>
+                <th>Perfil</th>
+                <th>Volumen</th>
+                <th>Near Min</th>
+                <th>Near Mult</th>
+                <th>Real</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="presets-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel channels-panel">
+        <header class="panel-header">
+          <div>
+            <h2>Canales de Telegram</h2>
+            <p>Se guardan en SQLite y se cargan al iniciar el Lector.</p>
+            <div class="panel-subtitle-row">
+              <button class="btn primary btn-inline-compact" id="channel-open-create" type="button">Agregar canal</button>
+              <button class="btn ghost btn-inline-compact" id="refresh-channels" type="button">Recargar lista</button>
+            </div>
+          </div>
+          <span class="hint-inline" id="channels-msg">Listo</span>
+        </header>
+
         <details class="collapsible-section">
-          <summary>Mostrar/ocultar perfiles de ejecución</summary>
+          <summary>Mostrar/ocultar canales de Telegram</summary>
+          <div class="table-wrap">
+            <table id="channels-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Nombre</th>
+                  <th>Chat ID</th>
+                  <th>Identificador</th>
+                  <th>Activo</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="channels-body"></tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+
+      <div class="modal-overlay hidden" id="profiles-modal" role="dialog" aria-modal="true" aria-labelledby="profiles-modal-title" hidden>
+        <div class="panel modal-panel">
+          <header class="panel-header">
+            <div>
+              <h2 id="profiles-modal-title">Perfiles de Ejecución</h2>
+              <p>Administra perfiles disponibles para asignar a presets del Operador.</p>
+              <p class="hint-inline">Sección en desarrollo.</p>
+            </div>
+            <span class="hint-inline" id="profile-msg">Listo</span>
+          </header>
           <div class="form-grid channels-grid">
             <label>
               Código
@@ -119,6 +169,7 @@
             <button class="btn ghost" id="profile-update" type="button">Actualizar perfil seleccionado</button>
             <button class="btn ghost" id="profile-delete" type="button">Eliminar perfil seleccionado</button>
             <button class="btn ghost" id="profile-refresh" type="button">Recargar perfiles</button>
+            <button class="btn ghost" id="profiles-modal-close" type="button">Cerrar</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -135,210 +186,207 @@
               <tbody id="profiles-body"></tbody>
             </table>
           </div>
-        </details>
-      </section>
-
-      <section class="panel channels-panel">
-        <header class="panel-header">
-          <div>
-            <h2>Presets del Operador</h2>
-            <p>Configuraciones predeterminadas para ejecutar y comparar.</p>
-          </div>
-          <span class="hint-inline" id="preset-msg">Listo</span>
-        </header>
-        <div class="form-grid channels-grid">
-          <label>
-            Nombre preset
-            <input id="preset_name" type="text" placeholder="Broker Demo A" />
-          </label>
-          <label>
-            MT5 Terminal Path
-            <input id="preset_mt5_terminal_path" type="text" placeholder="C:\Program Files\MetaTrader 5\terminal64.exe" />
-          </label>
-          <label>
-            MT5 Login
-            <input id="preset_mt5_login" type="number" inputmode="numeric" placeholder="123456" />
-          </label>
-          <label>
-            MT5 Server
-            <input id="preset_mt5_server" type="text" placeholder="Broker-Server" />
-          </label>
-          <label>
-            Perfil de ejecución
-            <select id="preset_execution_profile_id"></select>
-          </label>
-          <label>
-            Total Volume
-            <input id="preset_total_volume" type="number" step="0.01" value="0.03" />
-          </label>
-          <label>
-            Near Entry Pips Min
-            <input id="preset_near_entry_pips_min" type="number" step="0.1" value="1.0" />
-          </label>
-          <label>
-            Near Entry Spread Mult
-            <input id="preset_near_entry_spread_mult" type="number" step="0.1" value="2.0" />
-          </label>
-          <label class="checkbox">
-            <input id="preset_verify_order_after_send" type="checkbox" checked />
-            Verificar orden luego de enviar
-          </label>
-          <label class="checkbox">
-            <input id="preset_auto_close_on_mismatch" type="checkbox" />
-            Auto cerrar/cancelar mismatch
-          </label>
-          <label class="checkbox">
-            <input id="preset_is_default" type="checkbox" />
-            Marcar como default
-          </label>
         </div>
+      </div>
 
-        <div class="actions">
-          <button class="btn primary" id="preset-create" type="button">Guardar preset</button>
-          <button class="btn ghost" id="preset-update" type="button">Actualizar preset seleccionado</button>
-          <button class="btn ghost" id="preset-delete" type="button">Eliminar preset seleccionado</button>
-          <button class="btn ghost" id="preset-refresh" type="button">Recargar presets</button>
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Nombre</th>
-                <th>Perfil</th>
-                <th>Volumen</th>
-                <th>Near Min</th>
-                <th>Near Mult</th>
-                <th>Default</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody id="presets-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel">
-        <header class="panel-header">
-          <div>
-            <h2>Asignaciones Canal.Preset</h2>
-            <p>Cruce activo de proveedor y preset para real/virtual.</p>
-          </div>
-          <span class="hint-inline" id="assignment-msg">Listo</span>
-        </header>
-
-        <div class="form-grid channels-grid">
-          <label>
-            Canal
-            <select id="assignment_channel"></select>
-          </label>
-          <label>
-            Preset
-            <select id="assignment_config"></select>
-          </label>
-          <label>
-            Modo
-            <select id="assignment_mode">
-              <option value="virtual">virtual</option>
-              <option value="real">real</option>
-            </select>
-          </label>
-          <label>
-            Regla modo real
-            <input type="text" value="Máximo 1 asignación real por canal y solo con preset SWING" readonly />
-          </label>
-          <label class="checkbox">
-            <input id="assignment_is_active" type="checkbox" checked />
-            Asignación activa
-          </label>
-        </div>
-
-        <div class="actions">
-          <button class="btn primary" id="assignment-create" type="button">Crear asignación</button>
-          <button class="btn ghost" id="assignment-seed-cross" type="button">Autogenerar cruce Canal x Preset</button>
-          <button class="btn ghost" id="assignment-update" type="button">Actualizar seleccionada</button>
-          <button class="btn ghost" id="assignment-delete" type="button">Eliminar seleccionada</button>
-          <button class="btn ghost" id="assignment-refresh" type="button">Recargar</button>
-        </div>
-
-        <div class="section-separator assignment-separator" aria-hidden="true">
-          <span>Asignaciones creadas</span>
-        </div>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Canal</th>
-                <th>Preset</th>
-                <th>Perfil</th>
-                <th>Modo</th>
-                <th>Activa</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody id="assignments-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel">
-        <header class="panel-header">
-          <div>
-            <h2>Buscador de Detalle Canal.Preset</h2>
-            <p>Consulta rendimiento histórico por ID y fecha.</p>
-          </div>
-          <span class="hint-inline" id="cp-search-msg">Listo</span>
-        </header>
-        <div class="form-grid channels-grid">
-          <label>
-            ID Canal.Preset
-            <input id="cp-search-id" type="number" inputmode="numeric" placeholder="Ej: 12" />
-          </label>
-          <label>
-            Desde (fecha y hora)
-            <input id="cp-search-from" type="datetime-local" step="1" />
-          </label>
-          <label>
-            Hasta (fecha y hora)
-            <input id="cp-search-to" type="datetime-local" step="1" />
-          </label>
+      <div class="modal-overlay hidden" id="channel-modal" role="dialog" aria-modal="true" aria-labelledby="channel-modal-title" hidden>
+        <div class="panel modal-panel">
+          <header class="panel-header">
+            <div>
+              <h2 id="channel-modal-title">Agregar canal</h2>
+              <p>Completa la configuración del canal de Telegram.</p>
+            </div>
+          </header>
+          <form id="channel-form" class="form-grid channels-grid">
+            <input type="hidden" id="channel_id" />
+            <label>
+              Nombre del canal
+              <input id="channel_name" type="text" placeholder="TechnicalPips" required />
+            </label>
+            <label>
+              Chat ID
+              <input id="channel_chat_id" type="text" placeholder="-1001234567890" required />
+            </label>
+            <label>
+              ID externo (opcional)
+              <input id="channel_external_id" type="text" placeholder="@alias / slug / nota" />
+            </label>
+            <label class="checkbox">
+              <input id="channel_is_active" type="checkbox" checked />
+              Canal activo
+            </label>
+          </form>
           <div class="actions">
-            <button class="btn primary" id="cp-search-btn" type="button">Buscar y abrir detalle</button>
-            <button class="btn ghost" id="cp-search-clear" type="button">Limpiar</button>
+            <button class="btn primary" id="channel-modal-save" type="button">Guardar canal</button>
+            <button class="btn ghost" id="channel-modal-cancel" type="button">Cancelar</button>
           </div>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Canal.Preset</th>
-                <th>Modo actual</th>
-                <th>Activo</th>
-                <th>Primer evento</th>
-                <th>Último evento</th>
-                <th>Eventos</th>
-                <th>Acciones</th>
-              </tr>
-            </thead>
-            <tbody id="cp-search-results"></tbody>
-          </table>
+      </div>
+
+      <div class="modal-overlay hidden" id="channel-save-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="channel-save-confirm-title" hidden>
+        <div class="panel modal-panel modal-panel-mini">
+          <header class="panel-header">
+            <div>
+              <h2 id="channel-save-confirm-title">Confirmar guardado de canal</h2>
+              <p id="channel-save-confirm-text">Confirma para guardar los cambios del canal.</p>
+            </div>
+          </header>
+          <div class="actions">
+            <button class="btn primary" id="channel-save-confirm-accept" type="button">Confirmar</button>
+            <button class="btn ghost" id="channel-save-confirm-cancel" type="button">Volver</button>
+          </div>
         </div>
-      </section>
+      </div>
+
+      <div class="modal-overlay hidden" id="channel-success-modal" role="dialog" aria-modal="true" aria-labelledby="channel-success-title" hidden>
+        <div class="panel modal-panel modal-panel-mini">
+          <header class="panel-header">
+            <div>
+              <h2 id="channel-success-title">Canal guardado correctamente</h2>
+            </div>
+          </header>
+          <p id="channel-success-detail" class="modal-detail-text">Se guardó la configuración del canal.</p>
+          <p id="channel-success-time" class="hint-inline">Hora: --:--:--</p>
+          <div class="actions">
+            <button class="btn primary" id="channel-success-close" type="button">Aceptar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-overlay hidden" id="channel-delete-modal" role="dialog" aria-modal="true" aria-labelledby="channel-delete-title" hidden>
+        <div class="panel modal-panel modal-panel-danger">
+          <header class="panel-header">
+            <div>
+              <h2 id="channel-delete-title">Eliminar canal (acción crítica)</h2>
+              <p class="modal-danger-note">Esta acción elimina el canal y sus asignaciones Canal.Preset relacionadas.</p>
+            </div>
+          </header>
+          <p id="channel-delete-detail" class="modal-detail-text">Canal seleccionado: -</p>
+          <label>
+            Contraseña de acceso web
+            <input id="channel-delete-password" type="password" autocomplete="current-password" placeholder="Ingresa tu contraseña" />
+          </label>
+          <span id="channel-delete-msg" class="hint-inline">Confirma tu contraseña para continuar.</span>
+          <div class="actions">
+            <button class="btn danger" id="channel-delete-confirm" type="button">Eliminar definitivamente</button>
+            <button class="btn ghost" id="channel-delete-cancel" type="button">Cancelar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-overlay hidden" id="preset-modal" role="dialog" aria-modal="true" aria-labelledby="preset-modal-title" hidden>
+        <div class="panel modal-panel">
+          <header class="panel-header">
+            <div>
+              <h2 id="preset-modal-title">Agregar preset</h2>
+              <p>Completa la configuración del preset del Operador.</p>
+            </div>
+          </header>
+          <div class="form-grid channels-grid">
+            <label>
+              Nombre preset
+              <input id="preset_name" type="text" placeholder="Broker Demo A" />
+            </label>
+            <label>
+              MT5 Terminal Path
+              <input id="preset_mt5_terminal_path" type="text" placeholder="C:\Program Files\MetaTrader 5\terminal64.exe" />
+            </label>
+            <label>
+              MT5 Login
+              <input id="preset_mt5_login" type="number" inputmode="numeric" placeholder="123456" />
+            </label>
+            <label>
+              MT5 Server
+              <input id="preset_mt5_server" type="text" placeholder="Broker-Server" />
+            </label>
+            <label>
+              Perfil de ejecución
+              <select id="preset_execution_profile_id"></select>
+            </label>
+            <label>
+              Total Volume
+              <input id="preset_total_volume" type="number" step="0.01" value="0.03" />
+            </label>
+            <label>
+              Near Entry Pips Min
+              <input id="preset_near_entry_pips_min" type="number" step="0.1" value="1.0" />
+            </label>
+            <label>
+              Near Entry Spread Mult
+              <input id="preset_near_entry_spread_mult" type="number" step="0.1" value="2.0" />
+            </label>
+            <label class="checkbox">
+              <input id="preset_verify_order_after_send" type="checkbox" checked />
+              Verificar orden luego de enviar
+            </label>
+            <label class="checkbox">
+              <input id="preset_auto_close_on_mismatch" type="checkbox" />
+              Auto cerrar/cancelar mismatch
+            </label>
+            <label class="checkbox">
+              <input id="preset_is_default" type="checkbox" />
+              Marcar como preset real (único)
+            </label>
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="preset-modal-save" type="button">Guardar preset</button>
+            <button class="btn ghost" id="preset-modal-cancel" type="button">Cancelar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-overlay hidden" id="preset-save-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="preset-save-confirm-title" hidden>
+        <div class="panel modal-panel modal-panel-mini">
+          <header class="panel-header">
+            <div>
+              <h2 id="preset-save-confirm-title">Confirmar guardado</h2>
+              <p id="preset-save-confirm-text">Confirma para guardar los cambios del preset.</p>
+            </div>
+          </header>
+          <div class="actions">
+            <button class="btn primary" id="preset-save-confirm-accept" type="button">Confirmar</button>
+            <button class="btn ghost" id="preset-save-confirm-cancel" type="button">Volver</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-overlay hidden" id="preset-success-modal" role="dialog" aria-modal="true" aria-labelledby="preset-success-title" hidden>
+        <div class="panel modal-panel modal-panel-mini">
+          <header class="panel-header">
+            <div>
+              <h2 id="preset-success-title">Datos guardados correctamente</h2>
+            </div>
+          </header>
+          <p id="preset-success-detail" class="modal-detail-text">Se guardó la configuración.</p>
+          <p id="preset-success-time" class="hint-inline">Hora: --:--:--</p>
+          <div class="actions">
+            <button class="btn primary" id="preset-success-close" type="button">Aceptar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-overlay hidden" id="preset-delete-modal" role="dialog" aria-modal="true" aria-labelledby="preset-delete-title" hidden>
+        <div class="panel modal-panel modal-panel-danger">
+          <header class="panel-header">
+            <div>
+              <h2 id="preset-delete-title">Eliminar preset (acción crítica)</h2>
+              <p class="modal-danger-note">Esta acción elimina el preset y puede borrar asignaciones relacionadas.</p>
+            </div>
+          </header>
+          <p id="preset-delete-detail" class="modal-detail-text">Preset seleccionado: -</p>
+          <label>
+            Contraseña de acceso web
+            <input id="preset-delete-password" type="password" autocomplete="current-password" placeholder="Ingresa tu contraseña" />
+          </label>
+          <span id="preset-delete-msg" class="hint-inline">Confirma tu contraseña para continuar.</span>
+          <div class="actions">
+            <button class="btn danger" id="preset-delete-confirm" type="button">Eliminar definitivamente</button>
+            <button class="btn ghost" id="preset-delete-cancel" type="button">Cancelar</button>
+          </div>
+        </div>
+      </div>
     </main>
-    <script src="/static/ui.js"></script>
-    <script src="/static/configs.js"></script>
+    <script src="/static/ui.js?v=20260219b"></script>
+    <script src="/static/configs.js?v=20260219b"></script>
   </body>
 </html>
-
-
-
-
-
-
-
-
-
