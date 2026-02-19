@@ -15,16 +15,30 @@ const periodsPrevBtn = document.getElementById("periods-prev-page");
 const periodsNextBtn = document.getElementById("periods-next-page");
 const periodsPageInfo = document.getElementById("periods-page-info");
 const operationsBody = document.getElementById("operations-body");
+const operationsPrevBtn = document.getElementById("operations-prev-page");
+const operationsNextBtn = document.getElementById("operations-next-page");
+const operationsPageInfo = document.getElementById("operations-page-info");
 const modsBody = document.getElementById("mods-body");
+const modsPrevBtn = document.getElementById("mods-prev-page");
+const modsNextBtn = document.getElementById("mods-next-page");
+const modsPageInfo = document.getElementById("mods-page-info");
 
 const pnlChart = document.getElementById("cp-pnl-chart");
 const pnlCtx = pnlChart.getContext("2d");
 
 let currentAssignmentId = null;
 const PERIODS_PAGE_SIZE = 3;
+const OPERATIONS_PAGE_SIZE = 6;
+const MODS_PAGE_SIZE = 6;
 let periodsSorted = [];
 let periodsPage = 1;
 let periodsTotalPages = 1;
+let operationsSorted = [];
+let operationsPage = 1;
+let operationsTotalPages = 1;
+let modsSorted = [];
+let modsPage = 1;
+let modsTotalPages = 1;
 
 async function readJson(res) {
   try {
@@ -176,6 +190,23 @@ function periodTs(value) {
   return Number.isNaN(t) ? 0 : t;
 }
 
+function operationTs(op) {
+  const closeTs = new Date(op?.closed_at || "").getTime();
+  if (!Number.isNaN(closeTs) && closeTs > 0) {
+    return closeTs;
+  }
+  const openTs = new Date(op?.opened_at || "").getTime();
+  if (!Number.isNaN(openTs) && openTs > 0) {
+    return openTs;
+  }
+  return 0;
+}
+
+function modTs(mod) {
+  const ts = new Date(mod?.ts || "").getTime();
+  return Number.isNaN(ts) ? 0 : ts;
+}
+
 function updatePeriodsPager(totalRows = 0) {
   periodsTotalPages = Math.max(1, Math.ceil(totalRows / PERIODS_PAGE_SIZE));
   periodsPage = Math.min(Math.max(1, periodsPage), periodsTotalPages);
@@ -227,12 +258,44 @@ function renderPeriodsPage() {
 }
 
 function renderOperations(ops) {
+  operationsSorted = (ops || [])
+    .filter((op) => String(op?.status || "").toUpperCase() === "CLOSED")
+    .slice()
+    .sort((a, b) => {
+      const byTs = operationTs(b) - operationTs(a);
+      if (byTs !== 0) {
+        return byTs;
+      }
+      return Number(b?.id || 0) - Number(a?.id || 0);
+    });
+  operationsPage = 1;
+  renderOperationsPage();
+}
+
+function updateOperationsPager(totalRows = 0) {
+  operationsTotalPages = Math.max(1, Math.ceil(totalRows / OPERATIONS_PAGE_SIZE));
+  operationsPage = Math.min(Math.max(1, operationsPage), operationsTotalPages);
+  if (operationsPrevBtn) {
+    operationsPrevBtn.disabled = operationsPage <= 1 || totalRows <= 0;
+  }
+  if (operationsNextBtn) {
+    operationsNextBtn.disabled = operationsPage >= operationsTotalPages || totalRows <= 0;
+  }
+  if (operationsPageInfo) {
+    operationsPageInfo.textContent = `Página ${operationsPage} de ${operationsTotalPages} | ${totalRows} operación(es)`;
+  }
+}
+
+function renderOperationsPage() {
   operationsBody.innerHTML = "";
-  const rows = ops || [];
-  if (!rows.length) {
-    operationsBody.innerHTML = '<tr><td colspan="10" class="empty">Sin operaciones</td></tr>';
+  const totalRows = operationsSorted.length;
+  updateOperationsPager(totalRows);
+  if (!totalRows) {
+    operationsBody.innerHTML = '<tr><td colspan="10" class="empty">Sin operaciones cerradas</td></tr>';
     return;
   }
+  const start = (operationsPage - 1) * OPERATIONS_PAGE_SIZE;
+  const rows = operationsSorted.slice(start, start + OPERATIONS_PAGE_SIZE);
   for (const op of rows) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -252,12 +315,43 @@ function renderOperations(ops) {
 }
 
 function renderMods(mods) {
+  modsSorted = (mods || [])
+    .slice()
+    .sort((a, b) => {
+      const byTs = modTs(b) - modTs(a);
+      if (byTs !== 0) {
+        return byTs;
+      }
+      return Number(b?.operation_id || 0) - Number(a?.operation_id || 0);
+    });
+  modsPage = 1;
+  renderModsPage();
+}
+
+function updateModsPager(totalRows = 0) {
+  modsTotalPages = Math.max(1, Math.ceil(totalRows / MODS_PAGE_SIZE));
+  modsPage = Math.min(Math.max(1, modsPage), modsTotalPages);
+  if (modsPrevBtn) {
+    modsPrevBtn.disabled = modsPage <= 1 || totalRows <= 0;
+  }
+  if (modsNextBtn) {
+    modsNextBtn.disabled = modsPage >= modsTotalPages || totalRows <= 0;
+  }
+  if (modsPageInfo) {
+    modsPageInfo.textContent = `Página ${modsPage} de ${modsTotalPages} | ${totalRows} modificación(es)`;
+  }
+}
+
+function renderModsPage() {
   modsBody.innerHTML = "";
-  const rows = mods || [];
-  if (!rows.length) {
+  const totalRows = modsSorted.length;
+  updateModsPager(totalRows);
+  if (!totalRows) {
     modsBody.innerHTML = '<tr><td colspan="8" class="empty">Sin modificaciones</td></tr>';
     return;
   }
+  const start = (modsPage - 1) * MODS_PAGE_SIZE;
+  const rows = modsSorted.slice(start, start + MODS_PAGE_SIZE);
   for (const m of rows) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -327,8 +421,8 @@ function initActions() {
     detailMsg.textContent = "Sin selección";
     metaBody.innerHTML = "";
     renderPeriods([]);
-    operationsBody.innerHTML = "";
-    modsBody.innerHTML = "";
+    renderOperations([]);
+    renderMods([]);
     drawPnlSeries([]);
   });
   if (periodsPrevBtn) {
@@ -344,6 +438,38 @@ function initActions() {
       if (periodsPage < periodsTotalPages) {
         periodsPage += 1;
         renderPeriodsPage();
+      }
+    });
+  }
+  if (operationsPrevBtn) {
+    operationsPrevBtn.addEventListener("click", () => {
+      if (operationsPage > 1) {
+        operationsPage -= 1;
+        renderOperationsPage();
+      }
+    });
+  }
+  if (operationsNextBtn) {
+    operationsNextBtn.addEventListener("click", () => {
+      if (operationsPage < operationsTotalPages) {
+        operationsPage += 1;
+        renderOperationsPage();
+      }
+    });
+  }
+  if (modsPrevBtn) {
+    modsPrevBtn.addEventListener("click", () => {
+      if (modsPage > 1) {
+        modsPage -= 1;
+        renderModsPage();
+      }
+    });
+  }
+  if (modsNextBtn) {
+    modsNextBtn.addEventListener("click", () => {
+      if (modsPage < modsTotalPages) {
+        modsPage += 1;
+        renderModsPage();
       }
     });
   }
