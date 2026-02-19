@@ -1,0 +1,3 @@
+-r webapp/requirements.txt
+-r Lector/requirements.txt
+-r Operador/requirements.txt

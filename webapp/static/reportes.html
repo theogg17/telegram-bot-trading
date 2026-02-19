@@ -1,0 +1,131 @@
+﻿<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Bot - Reportes</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260218h" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <h1>Reportes y Monitoreo</h1>
+          <p>Seguimiento por combinación Canal.Preset en tiempo real.</p>
+        </div>
+        <div class="status-wrap">
+          <span class="pill" id="global-status">reportes</span>
+          <span class="meta" id="db-path">db: --</span>
+        </div>
+      </header>
+      <nav class="top-nav">
+        <a class="nav-link" href="/">Control</a>
+        <div class="nav-dropdown">
+          <a class="nav-link nav-dropdown-trigger" href="/operaciones">Operaciones</a>
+          <div class="nav-dropdown-menu">
+            <a class="nav-link nav-dropdown-item" href="/operaciones/historial">Historial</a>
+          </div>
+        </div>
+        <a class="nav-link active" href="/reportes">Reportes</a>
+        <a class="nav-link" href="/alertas">Alertas</a>
+        <a class="nav-link" href="/presets">Presets</a>
+        <a class="nav-link" href="/mensajes">Mensajes</a>
+        <a class="nav-link" href="/tutorial">Tutorial</a>
+      </nav>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Curva acumulada PnL por Canal.Preset</h2>
+            <p>Serie principal de evaluación por combinación activa Canal.Preset.</p>
+          </div>
+          <span class="hint-inline" id="series-msg">Cargando...</span>
+        </header>
+        <div class="actions chart-filters">
+          <label>
+            Desde
+            <input id="chart-from-ts" type="datetime-local" step="60" />
+          </label>
+          <label>
+            Hasta
+            <input id="chart-to-ts" type="datetime-local" step="60" />
+          </label>
+          <button class="btn ghost" id="chart-apply-filter" type="button">Aplicar período</button>
+          <button class="btn ghost" id="chart-reset-90" type="button">Últimos 90 días</button>
+          <span class="hint-inline" id="chart-range-msg">Período: últimos 90 días</span>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="pnl-chart" width="1200" height="420" class="chart-canvas"></canvas>
+          <div id="pnl-tooltip" class="chart-tooltip" hidden></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Resumen por combinación</h2>
+            <p>Incluye todas las combinaciones activas (aunque no tengan operaciones).</p>
+          </div>
+          <span class="hint-inline" id="summary-msg">Cargando...</span>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Canal.Preset</th>
+                <th>Modo</th>
+                <th>Eventos</th>
+                <th>Entries</th>
+                <th>Mods</th>
+                <th>Closes</th>
+                <th>Errores</th>
+                <th>PnL USD</th>
+                <th>PnL pips</th>
+              </tr>
+            </thead>
+            <tbody id="summary-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Métricas por Canal.Preset</h2>
+            <p>Frecuencia de trades y operaciones de larga duración.</p>
+          </div>
+          <span class="hint-inline" id="metrics-msg">Cargando...</span>
+        </header>
+        <canvas id="metrics-chart" width="1200" height="280" class="chart-canvas"></canvas>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Canal.Preset</th>
+                <th>Trades</th>
+                <th>Frecuencia/día</th>
+                <th>Duración promedio (min)</th>
+                <th>Largas (>=4h)</th>
+                <th>Buy/Sell</th>
+                <th>Detalle</th>
+              </tr>
+            </thead>
+            <tbody id="metrics-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+    <script src="/static/ui.js"></script>
+    <script src="/static/reportes.js"></script>
+  </body>
+</html>
+
+
+
+
+
+
+
+

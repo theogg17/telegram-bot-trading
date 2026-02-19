@@ -1,0 +1,68 @@
+ADVERTENCIA:
+
+En archivo config.py estan datos sensibles:
+- credenciales de cuenta Telegram
+- configuracion de OpenAI (ChatGPT) como parser
+- los canales ya NO estan hardcodeados: se leen desde SQLite (config/trading_bot.db)
+
+(si se desea compartir o escalar el programa, no compartir credenciales reales)
+
+
+-------------------------------------------
+FUNCIONAMIENTO GENERAL DEL PROGRAMA
+-------------------------------------------
+
+1. EJECUCION
+   - El programa principal es main.py.
+   - Al correrlo, NO instala dependencias automaticamente; deben estar preinstaladas.
+   - Luego arranca telegram_reader.py.
+   - Se conecta a los canales activos guardados en SQLite y genera CanalesDB.
+   - El bot escucha en tiempo real los mensajes de esos canales.
+
+2. PARSEO DE SENALES
+   - Cada mensaje nuevo se envia a OpenAI (ChatGPT).
+   - El modelo devuelve un JSON con una lista de "events".
+   - Un "event" es una accion de trading: puede ser "entry", "modification" o "close".
+   - El programa procesa cada evento por separado y lo guarda como fila en data/signals.csv.
+
+3. TIPOS DE EVENTOS
+   a) ENTRY
+      - Se crea un evento cuando aparece un mensaje con "ENTRY", SL y TP.
+      - Por defecto, operator_class = SWING, salvo que el texto mencione SCALP.
+      - Se guarda entry_price, stop_loss y take_profit.
+
+   b) CLOSE
+      - Si el mensaje dice "CLOSE" a secas -> se guarda close sin clase forzada (el operador resuelve por vinculo y perfil).
+      - Si dice "SCALP CLOSE +40 PIPS" -> se guarda close con operator_class=SCALP y close_pnl_pips=40.
+      - Si dice "SWING CLOSE ..." -> se guarda close con operator_class=SWING.
+      - Si un mismo mensaje aclara varias cosas (ej: SCALP CLOSE + SWING hold) -> se guardan varios eventos, uno por cada operador mencionado.
+      - Importante: el programa no inventa cierres para todos los operadores, solo guarda lo que el mensaje especifica.
+
+   c) MODIFICATION
+      - Se registra cuando un mensaje indica modificar SL o TP.
+      - Ejemplo tipico: "SWING move SL to Breakeven".
+      - Se guarda con type=modification, operator_class=SWING, move_to_breakeven=true.
+      - Si el mensaje es reply a un entry original, se copia el precio de entrada como new_stop_loss (para registrar el BE numerico).
+      - Tambien se guardan new_stop_loss o new_take_profit si aparecen en el texto.
+
+4. RELACION ENTRE EVENTOS
+   - Cada fila tiene un campo reply_to.
+   - Cuando un evento (close o modification) es respuesta al mensaje original de entrada, reply_to guarda el message_id del entry.
+   - Esto permite relacionar un cierre o modificacion con la operacion de entrada original.
+
+5. ARCHIVO CSV
+   - Todas las senales se guardan en data/signals.csv.
+   - Columnas principales: type, timestamp, message_id, reply_to, channel, symbol, operation, entry_price, stop_loss, take_profit, close_reason, operator_class, new_stop_loss, new_take_profit, move_to_breakeven, close_pnl_pips.
+   - El archivo es "append-only": cada evento genera una nueva fila.
+   - Esto permite un analisis estadistico posterior comparando SCALP vs SWING.
+
+6. MONITOR OPCIONAL
+   - Se puede ejecutar monitor_signals.py para copiar signals.csv a ./signals_monitor, como backup o para monitoreo externo.
+
+-------------------------------------------
+RECORDATORIO
+-------------------------------------------
+- Si se corre en otra computadora o se comparte, cambiar config.py para poner nuevas credenciales.
+- Si cambias canales en la web y el lector ya estaba corriendo, reinicialo para aplicar la nueva lista.
+- Se requiere una API key valida de OpenAI (OPENAI_API_KEY).
+- El bot solo guarda lo que dicen los mensajes. No crea eventos que no esten explicitamente escritos.

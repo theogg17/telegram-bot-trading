@@ -1,0 +1,137 @@
+﻿<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Bot - Historial de Cierres</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260218h" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <h1>Historial de Cierres</h1>
+          <p>Buscador avanzado de operaciones cerradas con filtros operativos.</p>
+        </div>
+        <div class="status-wrap">
+          <span class="pill" id="global-status">historial</span>
+          <span class="meta" id="db-path">db: --</span>
+        </div>
+      </header>
+      <nav class="top-nav">
+        <a class="nav-link" href="/">Control</a>
+        <div class="nav-dropdown">
+          <a class="nav-link nav-dropdown-trigger active" href="/operaciones">Operaciones</a>
+          <div class="nav-dropdown-menu">
+            <a class="nav-link nav-dropdown-item active" href="/operaciones/historial">Historial</a>
+          </div>
+        </div>
+        <a class="nav-link" href="/reportes">Reportes</a>
+        <a class="nav-link" href="/alertas">Alertas</a>
+        <a class="nav-link" href="/presets">Presets</a>
+        <a class="nav-link" href="/mensajes">Mensajes</a>
+        <a class="nav-link" href="/tutorial">Tutorial</a>
+      </nav>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Filtros</h2>
+            <p>Por defecto muestra las últimas 50 operaciones cerradas.</p>
+          </div>
+          <span class="hint-inline" id="search-msg">Listo</span>
+        </header>
+        <div class="actions">
+          <label>Apertura desde
+            <input id="f-open-from" type="datetime-local" />
+          </label>
+          <label>Apertura hasta
+            <input id="f-open-to" type="datetime-local" />
+          </label>
+          <label>Cierre desde
+            <input id="f-close-from" type="datetime-local" />
+          </label>
+          <label>Cierre hasta
+            <input id="f-close-to" type="datetime-local" />
+          </label>
+          <label>Par
+            <input id="f-symbol" type="text" placeholder="EURUSD" />
+          </label>
+          <label>Lado
+            <select id="f-side">
+              <option value="">Todos</option>
+              <option value="BUY">BUY</option>
+              <option value="SELL">SELL</option>
+            </select>
+          </label>
+          <label>ID
+            <input id="f-id" type="number" inputmode="numeric" placeholder="123" />
+          </label>
+          <label>Canal.Preset
+            <input id="f-channel-preset" type="text" placeholder="Canal.Preset" />
+          </label>
+          <label>Cierre
+            <input id="f-close-source" type="text" placeholder="manual_mt5 / signal / panel..." />
+          </label>
+          <label>ID mensaje cierre
+            <input id="f-close-message-id" type="text" placeholder="message id" />
+          </label>
+          <label>ID error
+            <input id="f-error-id" type="text" placeholder="error id" />
+          </label>
+          <button class="btn primary" id="btn-search" type="button">Buscar</button>
+          <button class="btn ghost" id="btn-clear" type="button">Limpiar</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Resultados</h2>
+            <p>Operaciones cerradas filtradas.</p>
+          </div>
+          <span class="hint-inline" id="results-msg">Cargando...</span>
+        </header>
+        <div class="table-wrap operations-history-wrap">
+          <table class="operations-history-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Estado</th>
+                <th>Canal.Preset</th>
+                <th>Par/Lado</th>
+                <th>Apertura</th>
+                <th>Cierre</th>
+                <th>Duración</th>
+                <th>Pips</th>
+                <th>PnL USD</th>
+                <th>Tipo cierre</th>
+                <th>ID mensaje cierre</th>
+                <th>ID error</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" id="prev-page" type="button">Anterior</button>
+          <button class="btn ghost" id="next-page" type="button">Siguiente</button>
+          <span class="hint-inline" id="page-info">Página 1</span>
+        </div>
+      </section>
+    </main>
+    <script src="/static/ui.js"></script>
+    <script src="/static/operaciones_historial.js?v=20260218b"></script>
+  </body>
+</html>
+
+
+
+
+
+
+
+
+

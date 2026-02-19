@@ -1,0 +1,134 @@
+﻿<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Bot - Operaciones</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260218h" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <h1>Operaciones</h1>
+          <p>Seguimiento de operaciones abiertas/pending y registro histórico de operaciones.</p>
+        </div>
+        <div class="status-wrap">
+          <span class="pill" id="global-status">operaciones</span>
+          <span class="meta" id="db-path">db: --</span>
+        </div>
+      </header>
+      <nav class="top-nav">
+        <a class="nav-link" href="/">Control</a>
+        <div class="nav-dropdown">
+          <a class="nav-link nav-dropdown-trigger active" href="/operaciones">Operaciones</a>
+          <div class="nav-dropdown-menu">
+            <a class="nav-link nav-dropdown-item" href="/operaciones/historial">Historial</a>
+          </div>
+        </div>
+        <a class="nav-link" href="/reportes">Reportes</a>
+        <a class="nav-link" href="/alertas">Alertas</a>
+        <a class="nav-link" href="/presets">Presets</a>
+        <a class="nav-link" href="/mensajes">Mensajes</a>
+        <a class="nav-link" href="/tutorial">Tutorial</a>
+      </nav>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Buscar Operación</h2>
+            <p>Ir directo a la descripción detallada por ID.</p>
+          </div>
+          <span class="hint-inline" id="search-msg">Listo</span>
+        </header>
+        <div class="actions">
+          <input id="search-operation-id" type="number" inputmode="numeric" placeholder="ID de operación" />
+          <button class="btn primary" id="search-operation-btn" type="button">Abrir descripción</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Abiertas y Pendientes</h2>
+            <p>Azul: abierta. Gris: pending. Refresco de pips y tiempo cada 1s.</p>
+          </div>
+          <span class="hint-inline" id="open-msg">Cargando...</span>
+        </header>
+        <div class="actions">
+          <label>
+            Cierre masivo
+            <select id="manual-close-mode">
+              <option value="all">Todas (real + virtual)</option>
+              <option value="virtual">Solo virtual</option>
+              <option value="real">Solo real</option>
+            </select>
+          </label>
+          <label class="checkbox">
+            <input id="manual-close-include-pending" type="checkbox" checked />
+            Incluir pending
+          </label>
+          <label class="checkbox">
+            <input id="manual-close-in-mt5" type="checkbox" />
+            Real: cerrar en MT5 (si Operador está activo)
+          </label>
+          <button class="btn ghost" id="manual-close-all-btn" type="button">Cerrar todas (filtro)</button>
+          <span class="hint-inline" id="manual-close-msg">Panel manual listo</span>
+        </div>
+        <div id="open-cards" class="operations-cards"></div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div class="panel-title-with-action">
+            <h2>Historial de Operaciones</h2>
+            <div class="panel-subtitle-row">
+              <p>Registro persistente de operaciones finalizadas.</p>
+              <a class="btn ghost btn-inline-compact" href="/operaciones/historial">Ver todas</a>
+            </div>
+          </div>
+          <span class="hint-inline" id="closed-msg">Cargando...</span>
+        </header>
+        <div class="table-wrap operations-history-wrap">
+          <table class="operations-history-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Estado</th>
+                <th>Canal.Preset</th>
+                <th>Par/Lado</th>
+                <th>Apertura</th>
+                <th>Cierre</th>
+                <th>Duración</th>
+                <th>Pips</th>
+                <th>PnL USD</th>
+                <th>Tipo cierre</th>
+                <th>ID mensaje cierre</th>
+                <th>ID error</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="closed-body"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" id="closed-prev" type="button">Anterior</button>
+          <button class="btn ghost" id="closed-next" type="button">Siguiente</button>
+          <span class="hint-inline" id="closed-page-info">Página 1</span>
+        </div>
+      </section>
+    </main>
+    <script src="/static/ui.js"></script>
+    <script src="/static/operaciones.js?v=20260218b"></script>
+  </body>
+</html>
+
+
+
+
+
+
+
+
+

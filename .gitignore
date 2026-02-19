@@ -1,0 +1,18 @@
+﻿# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Runtime/data
+queue/
+Lector/data/
+Operador/*.csv
+config/trading_bot.db
+config/web_auth.json
+config/runtime_env.key
+*.session
+
+# Secrets
+credenciales*.txt
+.env
+.env.*

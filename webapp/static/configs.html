@@ -1,0 +1,344 @@
+﻿<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Bot - Presets</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260218h" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <h1>Presets</h1>
+          <p>Canales, perfiles de ejecución, presets del Operador y asignaciones Canal.Preset.</p>
+        </div>
+        <div class="status-wrap">
+          <span class="pill" id="global-status">presets</span>
+          <span class="meta" id="db-path">db: --</span>
+        </div>
+      </header>
+      <nav class="top-nav">
+        <a class="nav-link" href="/">Control</a>
+        <div class="nav-dropdown">
+          <a class="nav-link nav-dropdown-trigger" href="/operaciones">Operaciones</a>
+          <div class="nav-dropdown-menu">
+            <a class="nav-link nav-dropdown-item" href="/operaciones/historial">Historial</a>
+          </div>
+        </div>
+        <a class="nav-link" href="/reportes">Reportes</a>
+        <a class="nav-link" href="/alertas">Alertas</a>
+        <a class="nav-link active" href="/presets">Presets</a>
+        <a class="nav-link" href="/mensajes">Mensajes</a>
+        <a class="nav-link" href="/tutorial">Tutorial</a>
+      </nav>
+
+      <section class="panel channels-panel">
+        <header class="panel-header">
+          <div>
+            <h2>Canales de Telegram</h2>
+            <p>Se guardan en SQLite y se cargan al iniciar el Lector.</p>
+          </div>
+          <span class="hint-inline" id="channels-msg">Listo</span>
+        </header>
+
+        <div class="table-wrap">
+          <table id="channels-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Nombre</th>
+                <th>Chat ID</th>
+                <th>Identificador</th>
+                <th>Activo</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="channels-body"></tbody>
+          </table>
+        </div>
+
+        <form id="channel-form" class="form-grid channels-grid">
+          <input type="hidden" id="channel_id" />
+          <label>
+            Nombre del canal
+            <input id="channel_name" type="text" placeholder="TechnicalPips" required />
+          </label>
+          <label>
+            Chat ID
+            <input id="channel_chat_id" type="text" placeholder="-1001234567890" required />
+          </label>
+          <label>
+            ID externo (opcional)
+            <input id="channel_external_id" type="text" placeholder="@alias / slug / nota" />
+          </label>
+          <label class="checkbox">
+            <input id="channel_is_active" type="checkbox" checked />
+            Canal activo
+          </label>
+        </form>
+
+        <div class="actions">
+          <button class="btn primary" id="save-channel" type="button">Guardar canal</button>
+          <button class="btn ghost" id="clear-channel" type="button">Limpiar formulario</button>
+          <button class="btn ghost" id="refresh-channels" type="button">Recargar lista</button>
+        </div>
+      </section>
+
+      <section class="panel channels-panel">
+        <header class="panel-header">
+          <div>
+            <h2>Perfiles de Ejecución</h2>
+            <p>Solo 2 perfiles permitidos: SCALP y SWING. Cada preset usa 1 perfil.</p>
+          </div>
+          <span class="hint-inline" id="profile-msg">Listo</span>
+        </header>
+        <details class="collapsible-section">
+          <summary>Mostrar/ocultar perfiles de ejecución</summary>
+          <div class="form-grid channels-grid">
+            <label>
+              Código
+              <input id="profile_code" type="text" placeholder="SCALP" />
+            </label>
+            <label>
+              Nombre
+              <input id="profile_name" type="text" placeholder="Scalp" />
+            </label>
+            <label>
+              Descripción
+              <input id="profile_description" type="text" placeholder="Perfil rápido para entradas cortas" />
+            </label>
+            <label class="checkbox">
+              <input id="profile_is_system" type="checkbox" />
+              Marcar como sistema (protegido)
+            </label>
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="profile-create" type="button">Guardar perfil</button>
+            <button class="btn ghost" id="profile-update" type="button">Actualizar perfil seleccionado</button>
+            <button class="btn ghost" id="profile-delete" type="button">Eliminar perfil seleccionado</button>
+            <button class="btn ghost" id="profile-refresh" type="button">Recargar perfiles</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Código</th>
+                  <th>Nombre</th>
+                  <th>Descripción</th>
+                  <th>Sistema</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="profiles-body"></tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+
+      <section class="panel channels-panel">
+        <header class="panel-header">
+          <div>
+            <h2>Presets del Operador</h2>
+            <p>Configuraciones predeterminadas para ejecutar y comparar.</p>
+          </div>
+          <span class="hint-inline" id="preset-msg">Listo</span>
+        </header>
+        <div class="form-grid channels-grid">
+          <label>
+            Nombre preset
+            <input id="preset_name" type="text" placeholder="Broker Demo A" />
+          </label>
+          <label>
+            MT5 Terminal Path
+            <input id="preset_mt5_terminal_path" type="text" placeholder="C:\Program Files\MetaTrader 5\terminal64.exe" />
+          </label>
+          <label>
+            MT5 Login
+            <input id="preset_mt5_login" type="number" inputmode="numeric" placeholder="123456" />
+          </label>
+          <label>
+            MT5 Server
+            <input id="preset_mt5_server" type="text" placeholder="Broker-Server" />
+          </label>
+          <label>
+            Perfil de ejecución
+            <select id="preset_execution_profile_id"></select>
+          </label>
+          <label>
+            Total Volume
+            <input id="preset_total_volume" type="number" step="0.01" value="0.03" />
+          </label>
+          <label>
+            Near Entry Pips Min
+            <input id="preset_near_entry_pips_min" type="number" step="0.1" value="1.0" />
+          </label>
+          <label>
+            Near Entry Spread Mult
+            <input id="preset_near_entry_spread_mult" type="number" step="0.1" value="2.0" />
+          </label>
+          <label class="checkbox">
+            <input id="preset_verify_order_after_send" type="checkbox" checked />
+            Verificar orden luego de enviar
+          </label>
+          <label class="checkbox">
+            <input id="preset_auto_close_on_mismatch" type="checkbox" />
+            Auto cerrar/cancelar mismatch
+          </label>
+          <label class="checkbox">
+            <input id="preset_is_default" type="checkbox" />
+            Marcar como default
+          </label>
+        </div>
+
+        <div class="actions">
+          <button class="btn primary" id="preset-create" type="button">Guardar preset</button>
+          <button class="btn ghost" id="preset-update" type="button">Actualizar preset seleccionado</button>
+          <button class="btn ghost" id="preset-delete" type="button">Eliminar preset seleccionado</button>
+          <button class="btn ghost" id="preset-refresh" type="button">Recargar presets</button>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Nombre</th>
+                <th>Perfil</th>
+                <th>Volumen</th>
+                <th>Near Min</th>
+                <th>Near Mult</th>
+                <th>Default</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="presets-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Asignaciones Canal.Preset</h2>
+            <p>Cruce activo de proveedor y preset para real/virtual.</p>
+          </div>
+          <span class="hint-inline" id="assignment-msg">Listo</span>
+        </header>
+
+        <div class="form-grid channels-grid">
+          <label>
+            Canal
+            <select id="assignment_channel"></select>
+          </label>
+          <label>
+            Preset
+            <select id="assignment_config"></select>
+          </label>
+          <label>
+            Modo
+            <select id="assignment_mode">
+              <option value="virtual">virtual</option>
+              <option value="real">real</option>
+            </select>
+          </label>
+          <label>
+            Regla modo real
+            <input type="text" value="Máximo 1 asignación real por canal y solo con preset SWING" readonly />
+          </label>
+          <label class="checkbox">
+            <input id="assignment_is_active" type="checkbox" checked />
+            Asignación activa
+          </label>
+        </div>
+
+        <div class="actions">
+          <button class="btn primary" id="assignment-create" type="button">Crear asignación</button>
+          <button class="btn ghost" id="assignment-seed-cross" type="button">Autogenerar cruce Canal x Preset</button>
+          <button class="btn ghost" id="assignment-update" type="button">Actualizar seleccionada</button>
+          <button class="btn ghost" id="assignment-delete" type="button">Eliminar seleccionada</button>
+          <button class="btn ghost" id="assignment-refresh" type="button">Recargar</button>
+        </div>
+
+        <div class="section-separator assignment-separator" aria-hidden="true">
+          <span>Asignaciones creadas</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Canal</th>
+                <th>Preset</th>
+                <th>Perfil</th>
+                <th>Modo</th>
+                <th>Activa</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="assignments-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Buscador de Detalle Canal.Preset</h2>
+            <p>Consulta rendimiento histórico por ID y fecha.</p>
+          </div>
+          <span class="hint-inline" id="cp-search-msg">Listo</span>
+        </header>
+        <div class="form-grid channels-grid">
+          <label>
+            ID Canal.Preset
+            <input id="cp-search-id" type="number" inputmode="numeric" placeholder="Ej: 12" />
+          </label>
+          <label>
+            Desde (fecha y hora)
+            <input id="cp-search-from" type="datetime-local" step="1" />
+          </label>
+          <label>
+            Hasta (fecha y hora)
+            <input id="cp-search-to" type="datetime-local" step="1" />
+          </label>
+          <div class="actions">
+            <button class="btn primary" id="cp-search-btn" type="button">Buscar y abrir detalle</button>
+            <button class="btn ghost" id="cp-search-clear" type="button">Limpiar</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Canal.Preset</th>
+                <th>Modo actual</th>
+                <th>Activo</th>
+                <th>Primer evento</th>
+                <th>Último evento</th>
+                <th>Eventos</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="cp-search-results"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="/static/ui.js"></script>
+    <script src="/static/configs.js"></script>
+  </body>
+</html>
+
+
+
+
+
+
+
+
+

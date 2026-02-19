@@ -1,0 +1,199 @@
+﻿<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Bot - Detalle Canal.Preset</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260218h" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <h1>Detalle Canal.Preset</h1>
+          <p>Histórico persistente por ID (no eliminable), operaciones y rendimiento.</p>
+        </div>
+        <div class="status-wrap">
+          <span class="pill">canal.preset</span>
+          <span class="meta" id="db-path">db: --</span>
+        </div>
+      </header>
+      <nav class="top-nav">
+        <a class="nav-link" href="/">Control</a>
+        <div class="nav-dropdown">
+          <a class="nav-link nav-dropdown-trigger" href="/operaciones">Operaciones</a>
+          <div class="nav-dropdown-menu">
+            <a class="nav-link nav-dropdown-item" href="/operaciones/historial">Historial</a>
+          </div>
+        </div>
+        <a class="nav-link" href="/reportes">Reportes</a>
+        <a class="nav-link" href="/alertas">Alertas</a>
+        <a class="nav-link" href="/presets">Presets</a>
+        <a class="nav-link" href="/mensajes">Mensajes</a>
+        <a class="nav-link" href="/tutorial">Tutorial</a>
+        <a class="nav-link active" href="/canal-presets">Detalle C.Preset</a>
+      </nav>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Buscador</h2>
+            <p>Buscar por ID de asignación y/o rango de fechas.</p>
+          </div>
+          <span class="hint-inline" id="search-msg">Listo</span>
+        </header>
+        <div class="form-grid channels-grid">
+          <label>
+            ID Canal.Preset
+            <input id="cp-id" type="number" inputmode="numeric" placeholder="Ej: 12" />
+          </label>
+          <label>
+            Desde (fecha y hora)
+            <input id="cp-from-ts" type="datetime-local" step="1" />
+          </label>
+          <label>
+            Hasta (fecha y hora)
+            <input id="cp-to-ts" type="datetime-local" step="1" />
+          </label>
+          <div class="actions">
+            <button class="btn primary" id="cp-search" type="button">Buscar</button>
+            <button class="btn ghost" id="cp-clear" type="button">Limpiar</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Canal.Preset</th>
+                <th>Modo actual</th>
+                <th>Activo</th>
+                <th>Primer evento</th>
+                <th>Último evento</th>
+                <th>Eventos</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="registry-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Resumen del ID seleccionado</h2>
+          </div>
+          <span class="hint-inline" id="detail-msg">Sin selección</span>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <tbody id="meta-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Curva PnL en el tiempo</h2>
+          </div>
+        </header>
+        <canvas id="cp-pnl-chart" width="1200" height="320" class="chart-canvas"></canvas>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Períodos de actividad</h2>
+          </div>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Inicio</th>
+                <th>Fin</th>
+                <th>Modo</th>
+                <th>Activa</th>
+                <th>Evento</th>
+                <th>Detalle</th>
+              </tr>
+            </thead>
+            <tbody id="periods-body"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" id="periods-prev-page" type="button">Más recientes</button>
+          <button class="btn ghost" id="periods-next-page" type="button">Más antiguas</button>
+          <span class="hint-inline" id="periods-page-info">Página 1</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Operaciones del Canal.Preset</h2>
+          </div>
+        </header>
+        <div class="table-wrap errors-scroll">
+          <table class="errors-table">
+            <thead>
+              <tr>
+                <th>ID Op</th>
+                <th>Estado</th>
+                <th>Modo</th>
+                <th>Par/Lado</th>
+                <th>Apertura</th>
+                <th>Cierre</th>
+                <th>Mods</th>
+                <th>Duración (s)</th>
+                <th>PnL USD</th>
+                <th>PnL pips</th>
+              </tr>
+            </thead>
+            <tbody id="operations-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Modificaciones registradas</h2>
+          </div>
+        </header>
+        <div class="table-wrap errors-scroll">
+          <table class="errors-table">
+            <thead>
+              <tr>
+                <th>ID Op</th>
+                <th>Timestamp</th>
+                <th>message_id</th>
+                <th>event_id</th>
+                <th>SL</th>
+                <th>TP</th>
+                <th>Estado</th>
+                <th>Detalle</th>
+              </tr>
+            </thead>
+            <tbody id="mods-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="/static/ui.js"></script>
+    <script src="/static/canal_preset_detalle.js"></script>
+  </body>
+</html>
+
+
+
+
+
+
+
+
+

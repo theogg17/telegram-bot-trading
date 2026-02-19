@@ -1,0 +1,202 @@
+﻿<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Bot Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260218h" />
+  </head>
+  <body class="control-page">
+    <div class="noise"></div>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <h1>Trading Bot Dashboard</h1>
+          <p>Control operativo de Lector y Operador.</p>
+        </div>
+        <div class="status-wrap">
+          <span class="pill" id="global-status">offline</span>
+          <span class="meta" id="db-path">db: --</span>
+        </div>
+      </header>
+      <nav class="top-nav">
+        <a class="nav-link active" href="/">Control</a>
+        <div class="nav-dropdown">
+          <a class="nav-link nav-dropdown-trigger" href="/operaciones">Operaciones</a>
+          <div class="nav-dropdown-menu">
+            <a class="nav-link nav-dropdown-item" href="/operaciones/historial">Historial</a>
+          </div>
+        </div>
+        <a class="nav-link" href="/reportes">Reportes</a>
+        <a class="nav-link" href="/alertas">Alertas</a>
+        <a class="nav-link" href="/presets">Presets</a>
+        <a class="nav-link" href="/mensajes">Mensajes</a>
+        <a class="nav-link" href="/tutorial">Tutorial</a>
+      </nav>
+
+      <section class="grid-two">
+        <article class="panel">
+          <header class="panel-header">
+            <div>
+              <h2>Lector</h2>
+              <p>Telegram + parser OpenAI</p>
+            </div>
+            <span class="status" id="status-lector">offline</span>
+          </header>
+          <form id="lector-form" class="form-grid">
+            <label>
+              Telegram API ID
+              <input id="telegram_api_id" type="number" inputmode="numeric" placeholder="123456" required />
+            </label>
+            <label>
+              Telegram API Hash
+              <input id="telegram_api_hash" type="password" placeholder="hash" required />
+            </label>
+            <label>
+              OpenAI API Key
+              <input id="openai_api_key" type="password" placeholder="sk-..." required />
+            </label>
+            <label>
+              OpenAI Model
+              <input id="openai_model" type="text" placeholder="gpt-4o-mini" required />
+            </label>
+            <label>
+              OpenAI Base URL (opcional)
+              <input id="openai_base_url" type="text" placeholder="https://api.openai.com/v1" />
+            </label>
+          </form>
+          <div class="actions">
+            <button class="btn primary" id="start-lector" type="button">Iniciar Lector</button>
+            <button class="btn ghost" id="stop-lector" type="button">Detener</button>
+            <span class="hint-inline" id="lector-msg">Listo</span>
+          </div>
+        </article>
+
+        <article class="panel">
+          <header class="panel-header">
+            <div>
+            <h2>Operador</h2>
+              <p>Ejecución MT5 (config activa desde /presets)</p>
+            </div>
+            <span class="status" id="status-operador">offline</span>
+          </header>
+          <form id="operador-form" class="form-grid">
+            <label>
+              MT5 Terminal Path
+              <input id="mt5_terminal_path" type="text" placeholder="C:\Program Files\MetaTrader 5\terminal64.exe" required />
+            </label>
+            <label>
+              MT5 Login
+              <input id="mt5_login" type="number" inputmode="numeric" placeholder="123456" required />
+            </label>
+            <label>
+              MT5 Password
+              <input id="mt5_password" type="password" placeholder="password" required />
+            </label>
+            <label>
+              MT5 Server
+              <input id="mt5_server" type="text" placeholder="Broker-Server" required />
+            </label>
+          </form>
+          <div class="actions">
+            <button class="btn primary" id="start-operador" type="button">Iniciar Operador</button>
+            <button class="btn ghost" id="stop-operador" type="button">Detener</button>
+            <span class="hint-inline" id="operador-msg">Listo</span>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Reinicio Automático</h2>
+            <p>Reinicio controlado para operación 24/7. Recomendado: solo Operador.</p>
+          </div>
+          <span class="hint-inline" id="restart-msg">Listo</span>
+        </header>
+        <div class="form-grid channels-grid">
+          <label class="checkbox">
+            <input id="restart-enabled" type="checkbox" />
+            Activar reinicio automático
+          </label>
+          <label>
+            Intervalo (minutos)
+            <input id="restart-interval-min" type="number" min="5" step="5" value="240" />
+          </label>
+          <label>
+            Objetivo de reinicio
+            <select id="restart-target">
+              <option value="operador" selected>Operador (recomendado)</option>
+              <option value="lector">Lector</option>
+              <option value="both">Lector + Operador</option>
+            </select>
+          </label>
+          <label>
+            Próximo reinicio
+            <input id="restart-next-at" type="text" readonly />
+          </label>
+          <label>
+            Cuenta regresiva
+            <input id="restart-countdown" type="text" readonly />
+          </label>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" id="restart-save" type="button">Guardar programación</button>
+          <button class="btn primary" id="restart-now" type="button">Reinicio rápido (prueba)</button>
+          <button class="btn ghost" id="seed-recommended-presets" type="button">Cargar presets recomendados</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Errores recientes</h2>
+            <p>Vista rápida de errores para control operativo inmediato.</p>
+          </div>
+          <span class="hint-inline" id="control-errors-msg">Cargando...</span>
+        </header>
+        <div class="table-wrap errors-scroll">
+          <table class="errors-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Canal.Preset</th>
+                <th>Modo</th>
+                <th>Evento</th>
+                <th>Error</th>
+                <th>Detalle</th>
+              </tr>
+            </thead>
+            <tbody id="control-errors-body"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" id="control-errors-refresh" type="button">Recargar errores</button>
+          <a class="btn ghost" href="/alertas">Ver alertas y errores completos</a>
+        </div>
+      </section>
+
+      <section class="grid-two logs">
+        <article class="panel">
+          <header class="panel-header"><h2>Logs Lector</h2></header>
+          <pre class="terminal" id="log-lector"></pre>
+        </article>
+        <article class="panel">
+          <header class="panel-header"><h2>Logs Operador</h2></header>
+          <pre class="terminal" id="log-operador"></pre>
+        </article>
+      </section>
+    </main>
+
+    <script src="/static/ui.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+
+
+
+
+
+
+
+

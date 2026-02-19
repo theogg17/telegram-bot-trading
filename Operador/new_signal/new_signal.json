@@ -1,0 +1,14 @@
+{
+    "type": "entry",
+    "timestamp": "2025-04-30 21:36:28-03:00",
+    "message_id": "172",
+    "reply_to": "",
+    "channel": "MiCanalPrueba",
+    "channel_index": "3",
+    "symbol": "EURUSD",
+    "operation": "BUY",
+    "entry_price": "instantly",
+    "stop_loss": "1.1252",
+    "take_profit": "1.131",
+    "close_reason": "N/A"
+}

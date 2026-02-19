@@ -1,0 +1,40 @@
+ORDEN DE EJECUCION (RESUMEN)
+
+1) Iniciar webapp
+   - pip install -r requirements.txt
+   - python webapp\app.py
+   - abrir http://127.0.0.1:8000
+   - autenticarse (Basic Auth):
+     - recomendado: setear TRADING_BOT_WEB_USER / TRADING_BOT_WEB_PASSWORD
+     - fallback automático: credenciales en config\web_auth.json
+
+2) Configurar desde la web
+   - Canales Telegram (se guardan en SQLite: config/trading_bot.db)
+   - /configs: perfiles de ejecución + presets del Operador + asignaciones Canal.Preset (real/virtual)
+   - / (Control): credenciales Lector (Telegram + OpenAI) y password de Operador (MT5)
+   - /tutorial: guía paso a paso de cada parámetro
+
+3) Iniciar Lector y Operador desde el dashboard.
+
+4) Monitorear resultados
+   - /operaciones: abiertas/pending + historial cerrado + detalle por ID
+   - /reportes: curva por Canal.Preset, resumen y errores en tiempo real
+   - /mensajes: buscador por message_id/event_id
+
+5) Opcional: monitor de señales (por consola)
+
+```powershell
+python Lector\monitor_signals.py
+```
+
+NOTAS
+- Lector/main.py no instala dependencias automaticamente (entorno debe tener paquetes preinstalados).
+- El parser usa OpenAI (ChatGPT).
+- signals.csv es la fuente de eventos; no modificar manualmente mientras corre el bot.
+- Si cambias canales y el Lector ya estaba activo, reinicialo para aplicar la nueva lista.
+- Al iniciar Operador se valida watchlist (pares principales + XAUUSD + BTCUSD) y se informa en logs cuáles quedaron listos y cuáles no.
+- En modo real: cada señal abre como máximo 1 operación por asignación real.
+- SCALP/STANDARD/SWING se gestionan como perfiles, no como apertura múltiple de órdenes.
+- El detalle de operación discrimina cierres por señal (con message_id), por error (con error_id) y posible cierre manual detectado en MT5.
+- Reinicio automático: persiste configuración de arranque cifrada (clave local en config\runtime_env.key).
+- Cola robusta: eventos con error repetido pasan a queue\failed (no bloquean el loop).

@@ -1,0 +1,197 @@
+﻿<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Bot - Tutorial</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260218h" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <h1>Tutorial Operativo</h1>
+          <p>Guía fiel al comportamiento actual del bot (Lector + Operador + Dashboard).</p>
+        </div>
+        <div class="status-wrap">
+          <span class="pill">tutorial</span>
+          <span class="meta">actualizado para operación 24/7</span>
+        </div>
+      </header>
+      <nav class="top-nav">
+        <a class="nav-link" href="/">Control</a>
+        <div class="nav-dropdown">
+          <a class="nav-link nav-dropdown-trigger" href="/operaciones">Operaciones</a>
+          <div class="nav-dropdown-menu">
+            <a class="nav-link nav-dropdown-item" href="/operaciones/historial">Historial</a>
+          </div>
+        </div>
+        <a class="nav-link" href="/reportes">Reportes</a>
+        <a class="nav-link" href="/alertas">Alertas</a>
+        <a class="nav-link" href="/presets">Presets</a>
+        <a class="nav-link" href="/mensajes">Mensajes</a>
+        <a class="nav-link active" href="/tutorial">Tutorial</a>
+      </nav>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>1) Seguridad de acceso web</h2>
+            <p>Ahora el dashboard exige autenticación básica en todas las rutas.</p>
+          </div>
+        </header>
+        <ul>
+          <li>Prioridad 1: si defines <code>TRADING_BOT_WEB_USER</code> y <code>TRADING_BOT_WEB_PASSWORD</code>, usa esas credenciales.</li>
+          <li>Prioridad 2: si no hay variables, se crea <code>config/web_auth.json</code> con usuario/password aleatorios.</li>
+          <li>Recomendado para VPS: usar variables de entorno del sistema y restringir acceso de red (VPN o allowlist).</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>2) Flujo recomendado</h2>
+            <p>Orden de trabajo para operar sin editar código.</p>
+          </div>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              <tr><td>1</td><td>En <code>/presets</code>, revisa perfiles (<code>SCALP/SWING</code>) y presets.</td></tr>
+              <tr><td>2</td><td>Crea asignaciones <code>Canal.Preset</code> (modo <code>real</code> o <code>virtual</code>).</td></tr>
+              <tr><td>3</td><td>En <code>/</code> (Control), carga credenciales y arranca Lector y Operador.</td></tr>
+              <tr><td>4</td><td>Monitorea en <code>/operaciones</code>, <code>/reportes</code> y <code>/alertas</code>.</td></tr>
+              <tr><td>5</td><td>Audita mensajes en <code>/mensajes</code> por <code>message_id</code> o <code>event_id</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>3) Cómo decide cierres y modificaciones</h2>
+            <p>Resolución de operación objetivo en el estado actual del bot.</p>
+          </div>
+        </header>
+        <ul>
+          <li>Primero enlaza la señal por <code>reply_to</code>. Si no existe, usa <code>message_id</code>.</li>
+          <li>Luego busca en este orden: <code>open_trades.csv</code> -> <code>operation_records</code> (SQLite) -> <code>orders_index.csv</code> (fallback legacy).</li>
+          <li>La trazabilidad queda registrada con método de enlace, método de lookup y detalle del resultado.</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>3.1) Límite de modo real por canal</h2>
+            <p>Regla de seguridad para evitar multiplicar operaciones reales por una misma señal.</p>
+          </div>
+        </header>
+        <ul>
+          <li>Solo se permite <code>1</code> asignación <code>real</code> por canal.</li>
+          <li>El modo <code>real</code> solo se permite si el preset es perfil <code>SWING</code>.</li>
+          <li><code>Autogenerar cruce Canal x Preset</code> reconstruye las asignaciones (borra y crea nuevamente el cruce completo).</li>
+          <li>Si intentas crear/editar una segunda asignación real para el mismo canal, la API devuelve error <code>409</code>.</li>
+          <li>En <code>/presets</code> se muestra advertencia visual: “Máximo 1 asignación real por canal”.</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>3.2) Cierres por clase (SCALP/SWING)</h2>
+            <p>Un cierre/modificación puede apuntar solo a SCALP o solo a SWING.</p>
+          </div>
+        </header>
+        <ul>
+          <li>Si la señal dice cerrar <code>SCALP</code>, las posiciones <code>SWING</code> no se cierran.</li>
+          <li>Si la señal modifica <code>SWING</code> (por ejemplo mover SL a BE), los <code>SCALP</code> no se modifican.</li>
+          <li>Si la señal no especifica clase, se aplica a las operaciones abiertas relacionadas con ese mensaje.</li>
+          <li>En virtual, el cierre ignora <code>close_pnl_pips</code> reportado por señal y calcula pips por precio de mercado actual.</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>4) Protección ante falsos cierres por MT5</h2>
+            <p>El Operador no cierra de inmediato si hay ausencia momentánea en MT5.</p>
+          </div>
+        </header>
+        <ul>
+          <li>Si MT5 no responde (<code>terminal_info/account_info</code>), se salta sincronización de estado.</li>
+          <li>Una operación real se marca como “cierre manual detectado” solo tras múltiples chequeos consecutivos sin verla en MT5.</li>
+          <li>El umbral se controla con <code>MANUAL_CLOSE_CONFIRM_CHECKS</code> (default: <code>3</code>).</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>5) Cola robusta de eventos</h2>
+            <p>Manejo de eventos dañados para no bloquear operación 24/7.</p>
+          </div>
+        </header>
+        <ul>
+          <li>Si un evento en <code>queue/pending</code> falla al procesarse, acumula retries en SQLite.</li>
+          <li>Al superar <code>QUEUE_MAX_RETRIES</code> (default: <code>5</code>), se mueve a <code>queue/failed</code> (cuarentena).</li>
+          <li>Esto evita que un JSON corrupto frene reinicios programados o degrade todo el loop.</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>6) Reinicios 24/7 y persistencia segura</h2>
+            <p>El reinicio automático y el botón de reinicio rápido usan la misma lógica de reinicio controlado.</p>
+          </div>
+        </header>
+        <ul>
+          <li>El scheduler no reinicia si hay backlog en <code>queue/pending</code>; posterga y alerta.</li>
+          <li>La configuración de arranque de Lector/Operador se guarda cifrada en DB para sobrevivir reinicios de la webapp.</li>
+          <li>La clave de cifrado se guarda en <code>config/runtime_env.key</code>.</li>
+          <li>Si falta <code>cryptography</code>, el sistema usa fallback funcional no cifrado (recomendado instalar dependencias completas).</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>7) Lector y parser de señales</h2>
+            <p>Procesamiento robusto para latencia/red inestable.</p>
+          </div>
+        </header>
+        <ul>
+          <li>El parseo OpenAI se ejecuta en thread pool (no bloquea el loop de Telegram).</li>
+          <li>Hay timeout de parser: <code>PARSER_TIMEOUT_SEC</code> (default: <code>35</code>).</li>
+          <li>Con timeout o excepción, el mensaje se guarda como no señal con motivo técnico.</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>8) Reportes y exportación</h2>
+            <p>Estado actual de monitoreo y descarga de errores.</p>
+          </div>
+        </header>
+        <ul>
+          <li><code>/reportes</code> muestra curva por <code>Canal.Preset</code>, resumen y errores paginados.</li>
+          <li><code>Descargar Excel</code> exporta la tabla filtrada de errores recientes.</li>
+          <li>La ruta legacy PDF redirige a Excel por compatibilidad.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,91 @@
+﻿<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Bot - Mensajes</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260218h" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <h1>Mensajes</h1>
+          <p>Buscador por ID de mensaje/evento para auditar el origen de cada señal.</p>
+        </div>
+        <div class="status-wrap">
+          <span class="pill">mensajes</span>
+          <span class="meta" id="db-path">db: --</span>
+        </div>
+      </header>
+      <nav class="top-nav">
+        <a class="nav-link" href="/">Control</a>
+        <div class="nav-dropdown">
+          <a class="nav-link nav-dropdown-trigger" href="/operaciones">Operaciones</a>
+          <div class="nav-dropdown-menu">
+            <a class="nav-link nav-dropdown-item" href="/operaciones/historial">Historial</a>
+          </div>
+        </div>
+        <a class="nav-link" href="/reportes">Reportes</a>
+        <a class="nav-link" href="/alertas">Alertas</a>
+        <a class="nav-link" href="/presets">Presets</a>
+        <a class="nav-link active" href="/mensajes">Mensajes</a>
+        <a class="nav-link" href="/tutorial">Tutorial</a>
+      </nav>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Buscar por ID</h2>
+            <p>Admite <code>message_id</code>, <code>event_id</code> o <code>channel:message_id</code>.</p>
+          </div>
+          <span class="hint-inline" id="search-msg">Listo</span>
+        </header>
+        <div class="actions">
+          <input id="message-query" type="text" placeholder="Ej: 12345 o abcdef... o Canal:12345" />
+          <button class="btn primary" id="message-search-btn" type="button">Buscar</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Resultados</h2>
+            <p>Mensaje, canal, hora y payload registrado.</p>
+          </div>
+          <span class="hint-inline" id="results-msg">Sin búsqueda</span>
+        </header>
+        <div class="table-wrap">
+          <table class="errors-table">
+            <thead>
+              <tr>
+                <th>message_uid</th>
+                <th>message_id</th>
+                <th>event_id</th>
+                <th>Canal</th>
+                <th>Timestamp</th>
+                <th>Tipo</th>
+                <th>Par/Lado</th>
+                <th>Clase</th>
+                <th>Texto</th>
+              </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="/static/ui.js"></script>
+    <script src="/static/mensajes.js"></script>
+  </body>
+</html>
+
+
+
+
+
+
+
+
+
