@@ -133,55 +133,61 @@
       </section>
 
       <section class="panel">
-        <header class="panel-header">
-          <div>
-            <h2>Operaciones del Canal.Preset</h2>
+        <details class="collapsible-section">
+          <summary>Operaciones cerradas</summary>
+          <div class="table-wrap errors-scroll">
+            <table class="errors-table">
+              <thead>
+                <tr>
+                  <th>ID Op</th>
+                  <th>Estado</th>
+                  <th>Modo</th>
+                  <th>Par/Lado</th>
+                  <th>Apertura</th>
+                  <th>Cierre</th>
+                  <th>Mods</th>
+                  <th>Duración (s)</th>
+                  <th>PnL USD</th>
+                  <th>PnL pips</th>
+                </tr>
+              </thead>
+              <tbody id="operations-body"></tbody>
+            </table>
           </div>
-        </header>
-        <div class="table-wrap errors-scroll">
-          <table class="errors-table">
-            <thead>
-              <tr>
-                <th>ID Op</th>
-                <th>Estado</th>
-                <th>Modo</th>
-                <th>Par/Lado</th>
-                <th>Apertura</th>
-                <th>Cierre</th>
-                <th>Mods</th>
-                <th>Duración (s)</th>
-                <th>PnL USD</th>
-                <th>PnL pips</th>
-              </tr>
-            </thead>
-            <tbody id="operations-body"></tbody>
-          </table>
-        </div>
+          <div class="actions">
+            <button class="btn ghost" id="operations-prev-page" type="button">Más recientes</button>
+            <button class="btn ghost" id="operations-next-page" type="button">Más antiguas</button>
+            <span class="hint-inline" id="operations-page-info">Página 1</span>
+          </div>
+        </details>
       </section>
 
       <section class="panel">
-        <header class="panel-header">
-          <div>
-            <h2>Modificaciones registradas</h2>
+        <details class="collapsible-section">
+          <summary>Modificaciones registradas</summary>
+          <div class="table-wrap errors-scroll">
+            <table class="errors-table">
+              <thead>
+                <tr>
+                  <th>ID Op</th>
+                  <th>Timestamp</th>
+                  <th>message_id</th>
+                  <th>event_id</th>
+                  <th>SL</th>
+                  <th>TP</th>
+                  <th>Estado</th>
+                  <th>Detalle</th>
+                </tr>
+              </thead>
+              <tbody id="mods-body"></tbody>
+            </table>
           </div>
-        </header>
-        <div class="table-wrap errors-scroll">
-          <table class="errors-table">
-            <thead>
-              <tr>
-                <th>ID Op</th>
-                <th>Timestamp</th>
-                <th>message_id</th>
-                <th>event_id</th>
-                <th>SL</th>
-                <th>TP</th>
-                <th>Estado</th>
-                <th>Detalle</th>
-              </tr>
-            </thead>
-            <tbody id="mods-body"></tbody>
-          </table>
-        </div>
+          <div class="actions">
+            <button class="btn ghost" id="mods-prev-page" type="button">Más recientes</button>
+            <button class="btn ghost" id="mods-next-page" type="button">Más antiguas</button>
+            <span class="hint-inline" id="mods-page-info">Página 1</span>
+          </div>
+        </details>
       </section>
     </main>
     <script src="/static/ui.js"></script>
