@@ -1,4 +1,5 @@
 const dbPath = document.getElementById("db-path");
+const globalStatus = document.getElementById("global-status");
 const summaryBody = document.getElementById("summary-body");
 const metricsBody = document.getElementById("metrics-body");
 const errorsBody = document.getElementById("errors-body");
@@ -88,6 +89,22 @@ async function readJson(res) {
     return await res.json();
   } catch {
     return {};
+  }
+}
+
+function applyHeaderStatus(data = null) {
+  if (typeof window.applyGlobalHeaderStatus === "function") {
+    window.applyGlobalHeaderStatus(data);
+    return;
+  }
+  if (!globalStatus) {
+    return;
+  }
+  const online = !!(data?.lector?.running || data?.operador?.running);
+  globalStatus.textContent = online ? "ONLINE" : "OFFLINE";
+  globalStatus.classList.toggle("online", online);
+  if (dbPath && data?.db_path) {
+    dbPath.textContent = `db: ${data.db_path}`;
   }
 }
 
@@ -766,9 +783,7 @@ async function refreshAll() {
     const seriesData = await readJson(seriesRes);
     const metricsData = await readJson(metricsRes);
 
-    if (statusData.db_path) {
-      dbPath.textContent = `db: ${statusData.db_path}`;
-    }
+    applyHeaderStatus(statusData);
     renderSummary(summaryData.items || []);
     drawSeries(seriesData.series || {});
     renderMetrics(metricsData.items || []);

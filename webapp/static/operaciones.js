@@ -1,4 +1,5 @@
 const dbPath = document.getElementById("db-path");
+const globalStatus = document.getElementById("global-status");
 const searchMsg = document.getElementById("search-msg");
 const openMsg = document.getElementById("open-msg");
 const openCards = document.getElementById("open-cards");
@@ -20,6 +21,22 @@ let openLoadInFlight = false;
 
 function readJson(res) {
   return res.json().catch(() => ({}));
+}
+
+function applyHeaderStatus(data = null) {
+  if (typeof window.applyGlobalHeaderStatus === "function") {
+    window.applyGlobalHeaderStatus(data);
+    return;
+  }
+  if (!globalStatus) {
+    return;
+  }
+  const online = !!(data?.lector?.running || data?.operador?.running);
+  globalStatus.textContent = online ? "ONLINE" : "OFFLINE";
+  globalStatus.classList.toggle("online", online);
+  if (dbPath && data?.db_path) {
+    dbPath.textContent = `db: ${data.db_path}`;
+  }
 }
 
 function showToastMsg(message, type = "success") {
@@ -130,9 +147,7 @@ function updateClosedPager(meta) {
 async function refreshStatus() {
   const res = await fetch("/api/status");
   const data = await readJson(res);
-  if (data.db_path) {
-    dbPath.textContent = `db: ${data.db_path}`;
-  }
+  applyHeaderStatus(data);
 }
 
 async function loadOpenOperations() {

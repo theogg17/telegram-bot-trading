@@ -1,4 +1,5 @@
 const dbPath = document.getElementById("db-path");
+const globalStatus = document.getElementById("global-status");
 const channelsMsg = document.getElementById("channels-msg");
 const profileMsg = document.getElementById("profile-msg");
 const presetMsg = document.getElementById("preset-msg");
@@ -82,6 +83,22 @@ async function readJson(res) {
     return await res.json();
   } catch {
     return {};
+  }
+}
+
+function applyHeaderStatus(data = null) {
+  if (typeof window.applyGlobalHeaderStatus === "function") {
+    window.applyGlobalHeaderStatus(data);
+    return;
+  }
+  if (!globalStatus) {
+    return;
+  }
+  const online = !!(data?.lector?.running || data?.operador?.running);
+  globalStatus.textContent = online ? "ONLINE" : "OFFLINE";
+  globalStatus.classList.toggle("online", online);
+  if (dbPath && data?.db_path) {
+    dbPath.textContent = `db: ${data.db_path}`;
   }
 }
 
@@ -669,9 +686,7 @@ function validateRealPresetSelection(payload, editingPresetId = null) {
 async function refreshStatus() {
   const res = await fetch("/api/status");
   const data = await readJson(res);
-  if (data.db_path) {
-    dbPath.textContent = `db: ${data.db_path}`;
-  }
+  applyHeaderStatus(data);
 }
 
 async function loadChannels() {

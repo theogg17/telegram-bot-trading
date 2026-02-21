@@ -1,4 +1,5 @@
 const dbPath = document.getElementById("db-path");
+const globalStatus = document.getElementById("global-status");
 const titleOp = document.getElementById("title-op");
 const subtitleOp = document.getElementById("subtitle-op");
 const summaryBody = document.getElementById("summary-body");
@@ -8,6 +9,22 @@ const timelineMsg = document.getElementById("timeline-msg");
 
 function readJson(res) {
   return res.json().catch(() => ({}));
+}
+
+function applyHeaderStatus(data = null) {
+  if (typeof window.applyGlobalHeaderStatus === "function") {
+    window.applyGlobalHeaderStatus(data);
+    return;
+  }
+  if (!globalStatus) {
+    return;
+  }
+  const online = !!(data?.lector?.running || data?.operador?.running);
+  globalStatus.textContent = online ? "ONLINE" : "OFFLINE";
+  globalStatus.classList.toggle("online", online);
+  if (dbPath && data?.db_path) {
+    dbPath.textContent = `db: ${data.db_path}`;
+  }
 }
 
 function fmtNum(v, digits = 2) {
@@ -114,9 +131,7 @@ function renderTimeline(events) {
 async function refreshStatus() {
   const res = await fetch("/api/status");
   const data = await readJson(res);
-  if (data.db_path) {
-    dbPath.textContent = `db: ${data.db_path}`;
-  }
+  applyHeaderStatus(data);
 }
 
 async function loadDetail(operationId) {

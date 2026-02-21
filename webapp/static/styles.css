@@ -150,6 +150,12 @@ body {
   background: rgba(255, 255, 255, 0.07);
 }
 
+.pill.online {
+  color: #93ffd8;
+  border-color: rgba(70, 209, 191, 0.7);
+  background: rgba(70, 209, 191, 0.2);
+}
+
 .meta {
   font-size: 0.76rem;
   color: var(--muted);

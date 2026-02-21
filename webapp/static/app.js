@@ -180,9 +180,15 @@ async function refreshStatus() {
     const data = await readJson(res);
     setStatus(statusLector, !!data.lector?.running);
     setStatus(statusOperador, !!data.operador?.running);
-    globalStatus.textContent = data.lector?.running || data.operador?.running ? "running" : "offline";
-    if (data.db_path) {
-      dbPath.textContent = `db: ${data.db_path}`;
+    if (typeof window.applyGlobalHeaderStatus === "function") {
+      window.applyGlobalHeaderStatus(data);
+    } else {
+      const anyRunning = !!(data.lector?.running || data.operador?.running);
+      globalStatus.textContent = anyRunning ? "ONLINE" : "OFFLINE";
+      globalStatus.classList.toggle("online", anyRunning);
+      if (data.db_path) {
+        dbPath.textContent = `db: ${data.db_path}`;
+      }
     }
     const restart = data.auto_restart || {};
     restartEnabled.checked = !!restart.enabled;
@@ -202,7 +208,12 @@ async function refreshStatus() {
       document.getElementById("mt5_server").value = defaults.mt5_server;
     }
   } catch {
-    globalStatus.textContent = "offline";
+    if (typeof window.applyGlobalHeaderStatus === "function") {
+      window.applyGlobalHeaderStatus(null);
+    } else {
+      globalStatus.textContent = "OFFLINE";
+      globalStatus.classList.remove("online");
+    }
   }
 }
 
@@ -456,5 +467,5 @@ initActions();
 refreshStatus();
 refreshControlErrors();
 startCountdownTicker();
-setInterval(refreshStatus, 3000);
+setInterval(refreshStatus, 1000);
 setInterval(refreshControlErrors, 5000);

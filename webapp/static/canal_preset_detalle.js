@@ -1,4 +1,5 @@
 const dbPath = document.getElementById("db-path");
+const globalStatus = document.getElementById("global-status");
 const searchMsg = document.getElementById("search-msg");
 const detailMsg = document.getElementById("detail-msg");
 
@@ -58,6 +59,22 @@ async function readJson(res) {
     return await res.json();
   } catch {
     return {};
+  }
+}
+
+function applyHeaderStatus(data = null) {
+  if (typeof window.applyGlobalHeaderStatus === "function") {
+    window.applyGlobalHeaderStatus(data);
+    return;
+  }
+  if (!globalStatus) {
+    return;
+  }
+  const online = !!(data?.lector?.running || data?.operador?.running);
+  globalStatus.textContent = online ? "ONLINE" : "OFFLINE";
+  globalStatus.classList.toggle("online", online);
+  if (dbPath && data?.db_path) {
+    dbPath.textContent = `db: ${data.db_path}`;
   }
 }
 
@@ -733,11 +750,9 @@ async function init() {
   try {
     const statusRes = await fetch("/api/status");
     const statusData = await readJson(statusRes);
-    if (statusData.db_path) {
-      dbPath.textContent = `db: ${statusData.db_path}`;
-    }
+    applyHeaderStatus(statusData);
   } catch {
-    dbPath.textContent = "db: --";
+    applyHeaderStatus(null);
   }
 
   const params = new URLSearchParams(window.location.search);

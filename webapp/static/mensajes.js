@@ -1,4 +1,5 @@
 const dbPath = document.getElementById("db-path");
+const globalStatus = document.getElementById("global-status");
 const searchMsg = document.getElementById("search-msg");
 const resultsMsg = document.getElementById("results-msg");
 const resultsBody = document.getElementById("results-body");
@@ -6,6 +7,22 @@ const queryInput = document.getElementById("message-query");
 
 function readJson(res) {
   return res.json().catch(() => ({}));
+}
+
+function applyHeaderStatus(data = null) {
+  if (typeof window.applyGlobalHeaderStatus === "function") {
+    window.applyGlobalHeaderStatus(data);
+    return;
+  }
+  if (!globalStatus) {
+    return;
+  }
+  const online = !!(data?.lector?.running || data?.operador?.running);
+  globalStatus.textContent = online ? "ONLINE" : "OFFLINE";
+  globalStatus.classList.toggle("online", online);
+  if (dbPath && data?.db_path) {
+    dbPath.textContent = `db: ${data.db_path}`;
+  }
 }
 
 function fmtTs(value) {
@@ -23,9 +40,7 @@ function fmtTs(value) {
 async function refreshStatus() {
   const res = await fetch("/api/status");
   const data = await readJson(res);
-  if (data.db_path) {
-    dbPath.textContent = `db: ${data.db_path}`;
-  }
+  applyHeaderStatus(data);
 }
 
 function renderRows(items) {

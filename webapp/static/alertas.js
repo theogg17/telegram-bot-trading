@@ -1,4 +1,5 @@
 const dbPath = document.getElementById("db-path");
+const globalStatus = document.getElementById("global-status");
 const alertsMsg = document.getElementById("alerts-msg");
 const alertsActiveBody = document.getElementById("alerts-active-body");
 const alertsHistoryBody = document.getElementById("alerts-history-body");
@@ -51,6 +52,22 @@ async function readJson(res) {
     return await res.json();
   } catch {
     return {};
+  }
+}
+
+function applyHeaderStatus(data = null) {
+  if (typeof window.applyGlobalHeaderStatus === "function") {
+    window.applyGlobalHeaderStatus(data);
+    return;
+  }
+  if (!globalStatus) {
+    return;
+  }
+  const online = !!(data?.lector?.running || data?.operador?.running);
+  globalStatus.textContent = online ? "ONLINE" : "OFFLINE";
+  globalStatus.classList.toggle("online", online);
+  if (dbPath && data?.db_path) {
+    dbPath.textContent = `db: ${data.db_path}`;
   }
 }
 
@@ -343,9 +360,7 @@ async function refreshAll() {
   try {
     const statusRes = await fetch("/api/status");
     const statusData = await readJson(statusRes);
-    if (statusData.db_path) {
-      dbPath.textContent = `db: ${statusData.db_path}`;
-    }
+    applyHeaderStatus(statusData);
     await refreshActiveAlertsOnly();
     await refreshAlertHistoryOnly();
     await refreshErrorsOnly(errorsPage);

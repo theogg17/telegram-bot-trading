@@ -130,8 +130,62 @@
     }
   }
 
+  function isAnyServiceRunning(statusData) {
+    return !!(statusData?.lector?.running || statusData?.operador?.running);
+  }
+
+  function applyGlobalHeaderStatus(statusData = null) {
+    const globalStatus = document.getElementById("global-status");
+    if (!globalStatus) {
+      return;
+    }
+    const online = isAnyServiceRunning(statusData);
+    globalStatus.textContent = online ? "ONLINE" : "OFFLINE";
+    globalStatus.classList.toggle("online", online);
+    const dbPath = document.getElementById("db-path");
+    if (dbPath && statusData?.db_path) {
+      dbPath.textContent = `db: ${statusData.db_path}`;
+    }
+  }
+
+  async function refreshGlobalHeaderStatus() {
+    if (!document.getElementById("global-status")) {
+      return null;
+    }
+    try {
+      const res = await fetch("/api/status");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error("status_fetch_failed");
+      }
+      applyGlobalHeaderStatus(data);
+      return data;
+    } catch {
+      applyGlobalHeaderStatus(null);
+      return null;
+    }
+  }
+
+  let globalHeaderStatusPollHandle = null;
+
+  function startGlobalHeaderStatusPolling(intervalMs = 1000) {
+    if (!document.getElementById("global-status")) {
+      return;
+    }
+    if (document.body?.classList.contains("control-page")) {
+      return;
+    }
+    refreshGlobalHeaderStatus();
+    if (globalHeaderStatusPollHandle != null) {
+      return;
+    }
+    globalHeaderStatusPollHandle = window.setInterval(refreshGlobalHeaderStatus, intervalMs);
+  }
+
   window.showToast = showToast;
   window.showSavedToast = showSavedToast;
+  window.applyGlobalHeaderStatus = applyGlobalHeaderStatus;
+  window.refreshGlobalHeaderStatus = refreshGlobalHeaderStatus;
   window.dateTime24 = {
     normalizeForApi,
     enforce24hInputs,
@@ -140,12 +194,14 @@
   if (document.readyState === "loading") {
     document.addEventListener(
       "DOMContentLoaded",
-      () => {
-        enforce24hInputs(document);
-      },
+        () => {
+          enforce24hInputs(document);
+          startGlobalHeaderStatusPolling(1000);
+        },
       { once: true }
     );
   } else {
     enforce24hInputs(document);
+    startGlobalHeaderStatusPolling(1000);
   }
 })();
