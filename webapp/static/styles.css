@@ -140,6 +140,12 @@ body {
   gap: 8px;
 }
 
+.btn-logout {
+  padding: 6px 10px;
+  font-size: 0.76rem;
+  line-height: 1;
+}
+
 .pill {
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 999px;
@@ -389,8 +395,28 @@ input {
   border-radius: 10px;
   background: rgba(8, 12, 19, 0.62);
   color: var(--text);
+  color-scheme: dark;
   font-size: 0.92rem;
   padding: 10px 11px;
+}
+
+/* Evita fondo blanco por autofill del navegador en inputs de login/config */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--text);
+  -webkit-box-shadow: 0 0 0 1000px rgba(8, 12, 19, 0.92) inset;
+  box-shadow: 0 0 0 1000px rgba(8, 12, 19, 0.92) inset;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: background-color 9999s ease-out 0s;
+}
+
+input:-moz-autofill {
+  box-shadow: 0 0 0 1000px rgba(8, 12, 19, 0.92) inset;
+  -moz-text-fill-color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 select {
@@ -399,6 +425,7 @@ select {
   border-radius: 10px;
   background: rgba(8, 12, 19, 0.62);
   color: var(--text);
+  color-scheme: dark;
   font-size: 0.92rem;
   padding: 10px 11px;
 }
@@ -413,6 +440,10 @@ input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(70, 209, 191, 0.18);
+}
+
+.dp-simple-hidden {
+  width: 100%;
 }
 
 .checkbox {
@@ -733,6 +764,32 @@ input:focus {
 
 body.modal-open {
   overflow: hidden;
+}
+
+.web-auth-overlay {
+  z-index: 9800;
+}
+
+.web-auth-panel {
+  width: min(460px, 95vw);
+}
+
+.web-auth-panel .panel-header {
+  margin-bottom: 10px;
+}
+
+.web-auth-error {
+  min-height: 1.1em;
+  color: #ffc0c7;
+}
+
+.web-auth-actions {
+  justify-content: flex-end;
+}
+
+.web-auth-actions .btn[disabled] {
+  opacity: 0.7;
+  cursor: wait;
 }
 
 code {

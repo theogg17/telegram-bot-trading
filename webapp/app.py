@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import secrets
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -56,6 +57,17 @@ DEFAULT_CHANNELS = [
     ("MiCanalPrueba", "-1002509518709", ""),
 ]
 QUEUE_PENDING_DIR = ROOT_DIR / "queue" / "pending"
+QUEUE_DIR = ROOT_DIR / "queue"
+LECTOR_DATA_DIR = ROOT_DIR / "Lector" / "data"
+OPERADOR_DIR = ROOT_DIR / "Operador"
+BYTES_PER_GB = 1024 ** 3
+DISK_USAGE_THRESHOLDS_GB = (2, 5, 8, 10)
+DISK_FREE_FATAL_BYTES = max(
+    64 * 1024 * 1024,
+    int(str(os.getenv("TRADING_BOT_DISK_FREE_FATAL_BYTES", str(200 * 1024 * 1024))).strip() or str(200 * 1024 * 1024)),
+)
+DISK_CHECK_INTERVAL_SEC = max(10, int(str(os.getenv("TRADING_BOT_DISK_CHECK_INTERVAL_SEC", "60")).strip() or "60"))
+NO_DELETE_POLICY = str(os.getenv("TRADING_BOT_NO_DELETE_POLICY", "true")).strip().lower() in ("1", "true", "yes", "on")
 
 RESTART_TARGETS = {"operador", "lector", "both"}
 ALERT_SEVERITY_RANK = {"info": 1, "warning": 2, "critical": 3}
@@ -96,6 +108,10 @@ DEFAULT_APP_SETTINGS: dict[str, str] = {
     "auto_restart_interval_min": "240",
     "auto_restart_target": "operador",
     "auto_restart_next_at": "",
+    "auto_restart_crash_enabled": "true",
+    "auto_restart_crash_cooldown_sec": "15",
+    "auto_restart_crash_max_attempts": "6",
+    "auto_restart_crash_window_sec": "300",
     "alerts_enabled": "true",
     "alerts_check_interval_sec": "10",
     "alerts_queue_pending_threshold": "50",
@@ -109,7 +125,7 @@ DEFAULT_APP_SETTINGS: dict[str, str] = {
     "discord_enabled": "false",
     "discord_webhook_url": "",
     "discord_min_severity": "warning",
-    "retention_enabled": "true",
+    "retention_enabled": "false",
     "retention_run_interval_min": "60",
     "retention_archive_enabled": "true",
     "retention_strategy_days": "180",
@@ -124,6 +140,13 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 runtime_fernet = None
 web_auth_credentials: dict[str, str] | None = None
+WEB_SESSION_COOKIE_NAME = "tb_web_session"
+try:
+    WEB_SESSION_TTL_SEC = max(300, int(str(os.getenv("TRADING_BOT_WEB_SESSION_TTL_SEC", "43200")).strip() or "43200"))
+except Exception:
+    WEB_SESSION_TTL_SEC = 43200
+web_sessions: dict[str, dict[str, str | float]] = {}
+web_sessions_lock = threading.Lock()
 URUGUAY_TZ = ZoneInfo("America/Montevideo") if ZoneInfo is not None else timezone(timedelta(hours=-3))
 
 
@@ -168,6 +191,7 @@ class ProcessManager:
         self.log = LogHub()
         self.last_exit: int | None = None
         self.last_env: dict[str, str] | None = None
+        self.desired_running: bool = False
 
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -176,6 +200,7 @@ class ProcessManager:
         if self.running():
             raise RuntimeError(f"{self.name} already running")
         self.last_env = dict(env)
+        self.desired_running = True
         self.log.publish(f"[{self.name}] starting...")
         self.proc = subprocess.Popen(
             self.cmd,
@@ -204,6 +229,7 @@ class ProcessManager:
             pass
 
     def stop(self) -> None:
+        self.desired_running = False
         if not self.running():
             return
         self.log.publish(f"[{self.name}] stopping...")
@@ -310,6 +336,10 @@ class RestartConfigPayload(BaseModel):
     enabled: bool
     interval_minutes: int
     target: str = "operador"
+    crash_enabled: Optional[bool] = None
+    crash_cooldown_sec: Optional[int] = None
+    crash_max_attempts: Optional[int] = None
+    crash_window_sec: Optional[int] = None
 
 
 class RestartNowPayload(BaseModel):
@@ -347,6 +377,11 @@ class OperationsManualClosePayload(BaseModel):
 
 
 class WebAuthPasswordPayload(BaseModel):
+    password: str
+
+
+class WebAuthLoginPayload(BaseModel):
+    username: str
     password: str
 
 
@@ -450,40 +485,78 @@ def _load_or_create_web_auth_credentials() -> dict[str, str]:
     return {"username": user, "password": pwd, "source": "generated"}
 
 
-def _decode_basic_auth(header: str) -> tuple[str, str]:
-    if not str(header).startswith("Basic "):
-        return "", ""
-    token = str(header)[6:].strip()
-    if not token:
-        return "", ""
-    try:
-        decoded = base64.b64decode(token).decode("utf-8")
-    except Exception:
-        return "", ""
-    if ":" not in decoded:
-        return "", ""
-    user, pwd = decoded.split(":", 1)
-    return str(user), str(pwd)
-
-
-def _is_auth_valid(request: Request) -> bool:
+def _ensure_web_auth_credentials() -> dict[str, str]:
     global web_auth_credentials
     if web_auth_credentials is None:
         web_auth_credentials = _load_or_create_web_auth_credentials()
         src = web_auth_credentials.get("source", "")
         user = web_auth_credentials.get("username", "")
         print(f"[SECURITY] Web auth activo. user='{user}' source={src} file='{WEB_AUTH_FILE}'.")
-    expected_user = str(web_auth_credentials.get("username", ""))
-    expected_pass = str(web_auth_credentials.get("password", ""))
-    user, pwd = _decode_basic_auth(request.headers.get("authorization", ""))
+    return dict(web_auth_credentials)
+
+
+def _is_web_login_valid(username: str, password: str) -> bool:
+    creds = _ensure_web_auth_credentials()
+    expected_user = str(creds.get("username", ""))
+    expected_pass = str(creds.get("password", ""))
+    user = str(username or "")
+    pwd = str(password or "")
     return hmac.compare_digest(user, expected_user) and hmac.compare_digest(pwd, expected_pass)
 
 
+def _prune_web_sessions(now_ts: float | None = None) -> None:
+    now = float(now_ts if now_ts is not None else time.time())
+    expired: list[str] = []
+    for token, data in web_sessions.items():
+        expires_at = float(data.get("expires_at") or 0.0)
+        if expires_at <= now:
+            expired.append(token)
+    for token in expired:
+        web_sessions.pop(token, None)
+
+
+def _create_web_session(username: str) -> str:
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    with web_sessions_lock:
+        _prune_web_sessions(now_ts=now)
+        web_sessions[token] = {
+            "username": str(username or "").strip(),
+            "expires_at": now + float(WEB_SESSION_TTL_SEC),
+        }
+    return token
+
+
+def _clear_web_session(token: str) -> None:
+    tok = str(token or "").strip()
+    if not tok:
+        return
+    with web_sessions_lock:
+        web_sessions.pop(tok, None)
+
+
+def _get_web_session_user(request: Request) -> str:
+    token = str(request.cookies.get(WEB_SESSION_COOKIE_NAME, "") or "").strip()
+    if not token:
+        return ""
+    now = time.time()
+    with web_sessions_lock:
+        _prune_web_sessions(now_ts=now)
+        data = web_sessions.get(token)
+        if not data:
+            return ""
+        username = str(data.get("username", "") or "").strip()
+        if not username:
+            web_sessions.pop(token, None)
+            return ""
+        data["expires_at"] = now + float(WEB_SESSION_TTL_SEC)
+        web_sessions[token] = data
+        return username
+
+
 def _is_web_password_valid(password: str) -> bool:
-    global web_auth_credentials
-    if web_auth_credentials is None:
-        web_auth_credentials = _load_or_create_web_auth_credentials()
-    expected_pass = str(web_auth_credentials.get("password", ""))
+    creds = _ensure_web_auth_credentials()
+    expected_pass = str(creds.get("password", ""))
     provided = str(password or "")
     return bool(expected_pass) and hmac.compare_digest(provided, expected_pass)
 
@@ -3145,6 +3218,194 @@ def _search_messages(query: str, limit: int):
 restart_lock = threading.Lock()
 alerts_lock = threading.Lock()
 workers_started = False
+disk_monitor_lock = threading.Lock()
+disk_monitor_last_ts = 0.0
+disk_monitor_last_snapshot: dict[str, int | float] = {}
+emergency_shutdown_lock = threading.Lock()
+emergency_shutdown_triggered = False
+crash_watchdog_lock = threading.Lock()
+crash_restart_history: dict[str, list[float]] = {
+    PROCESS_NAME_LECTOR: [],
+    PROCESS_NAME_OPERADOR: [],
+}
+crash_restart_next_try_ts: dict[str, float] = {
+    PROCESS_NAME_LECTOR: 0.0,
+    PROCESS_NAME_OPERADOR: 0.0,
+}
+
+
+def _bytes_to_gb(value: int | float) -> float:
+    try:
+        return round(float(value) / float(BYTES_PER_GB), 3)
+    except Exception:
+        return 0.0
+
+
+def _path_size_bytes(path: Path) -> int:
+    p = Path(path)
+    try:
+        if not p.exists():
+            return 0
+        if p.is_file():
+            return int(p.stat().st_size)
+    except Exception:
+        return 0
+    total = 0
+    try:
+        for child in p.rglob("*"):
+            try:
+                if child.is_file():
+                    total += int(child.stat().st_size)
+            except Exception:
+                continue
+    except Exception:
+        return int(total)
+    return int(total)
+
+
+def _operador_csv_size_bytes() -> int:
+    total = 0
+    try:
+        if not OPERADOR_DIR.exists():
+            return 0
+        for p in OPERADOR_DIR.glob("*.csv"):
+            try:
+                total += int(p.stat().st_size)
+            except Exception:
+                continue
+    except Exception:
+        return int(total)
+    return int(total)
+
+
+def _db_family_size_bytes() -> int:
+    total = 0
+    db_main = Path(DB_PATH)
+    for p in (db_main, Path(str(db_main) + "-wal"), Path(str(db_main) + "-shm")):
+        try:
+            if p.exists() and p.is_file():
+                total += int(p.stat().st_size)
+        except Exception:
+            continue
+    return int(total)
+
+
+def _project_storage_snapshot(force: bool = False) -> dict[str, int | float]:
+    global disk_monitor_last_ts, disk_monitor_last_snapshot
+    now = time.time()
+    with disk_monitor_lock:
+        if (
+            not force
+            and disk_monitor_last_snapshot
+            and (now - float(disk_monitor_last_ts)) < float(DISK_CHECK_INTERVAL_SEC)
+        ):
+            return dict(disk_monitor_last_snapshot)
+
+    queue_bytes = _path_size_bytes(QUEUE_DIR)
+    lector_data_bytes = _path_size_bytes(LECTOR_DATA_DIR)
+    operador_csv_bytes = _operador_csv_size_bytes()
+    db_family_bytes = _db_family_size_bytes()
+    project_bytes = int(queue_bytes + lector_data_bytes + operador_csv_bytes + db_family_bytes)
+
+    du = shutil.disk_usage(str(ROOT_DIR))
+    snapshot: dict[str, int | float] = {
+        "project_bytes": int(project_bytes),
+        "project_gb": _bytes_to_gb(project_bytes),
+        "queue_bytes": int(queue_bytes),
+        "queue_gb": _bytes_to_gb(queue_bytes),
+        "lector_data_bytes": int(lector_data_bytes),
+        "lector_data_gb": _bytes_to_gb(lector_data_bytes),
+        "operador_csv_bytes": int(operador_csv_bytes),
+        "operador_csv_gb": _bytes_to_gb(operador_csv_bytes),
+        "db_family_bytes": int(db_family_bytes),
+        "db_family_gb": _bytes_to_gb(db_family_bytes),
+        "disk_total_bytes": int(du.total),
+        "disk_used_bytes": int(du.used),
+        "disk_free_bytes": int(du.free),
+        "disk_total_gb": _bytes_to_gb(du.total),
+        "disk_used_gb": _bytes_to_gb(du.used),
+        "disk_free_gb": _bytes_to_gb(du.free),
+        "checked_at": _utc_now_iso(),
+    }
+
+    with disk_monitor_lock:
+        disk_monitor_last_snapshot = dict(snapshot)
+        disk_monitor_last_ts = now
+    return dict(snapshot)
+
+
+def _storage_threshold_severity(threshold_gb: int) -> str:
+    if int(threshold_gb) >= 8:
+        return "critical"
+    return "warning"
+
+
+def _trigger_emergency_shutdown_disk(snapshot: dict[str, int | float]) -> None:
+    global emergency_shutdown_triggered
+    with emergency_shutdown_lock:
+        if emergency_shutdown_triggered:
+            return
+        emergency_shutdown_triggered = True
+    print(
+        "[FATAL] Espacio en disco insuficiente. "
+        f"project_gb={snapshot.get('project_gb')} free_gb={snapshot.get('disk_free_gb')} "
+        f"free_bytes={snapshot.get('disk_free_bytes')} threshold_bytes={DISK_FREE_FATAL_BYTES}. "
+        "Apagando sistema."
+    )
+    try:
+        if lector_manager.running():
+            lector_manager.stop()
+    except Exception:
+        pass
+    try:
+        if operador_manager.running():
+            operador_manager.stop()
+    except Exception:
+        pass
+    try:
+        _dispatch_pending_discord_alerts()
+    except Exception:
+        pass
+    time.sleep(1.0)
+    os._exit(2)
+
+
+def _evaluate_storage_alerts(send_threshold_alerts: bool = True) -> dict[str, int | float]:
+    snapshot = _project_storage_snapshot()
+    project_bytes = int(snapshot.get("project_bytes") or 0)
+    free_bytes = int(snapshot.get("disk_free_bytes") or 0)
+
+    if send_threshold_alerts:
+        for threshold_gb in DISK_USAGE_THRESHOLDS_GB:
+            thr_bytes = int(threshold_gb) * BYTES_PER_GB
+            active = project_bytes >= thr_bytes
+            _alert_check_or_resolve(
+                active,
+                source="storage",
+                code=f"DISK_USAGE_{int(threshold_gb)}GB",
+                severity=_storage_threshold_severity(int(threshold_gb)),
+                title=f"Uso de almacenamiento del bot >= {int(threshold_gb)}GB",
+                details=f"El almacenamiento del bot superó el umbral de {int(threshold_gb)}GB.",
+                data={"threshold_gb": int(threshold_gb)},
+            )
+
+    disk_fatal = free_bytes <= int(DISK_FREE_FATAL_BYTES)
+    if disk_fatal:
+        _upsert_alert(
+            source="storage",
+            code="DISK_SPACE_FATAL",
+            severity="critical",
+            title="Disco sin espacio disponible",
+            details=(
+                f"disk_free_bytes={free_bytes} threshold={DISK_FREE_FATAL_BYTES} "
+                f"project_gb={snapshot.get('project_gb')} disk_free_gb={snapshot.get('disk_free_gb')}"
+            ),
+            data=snapshot,
+        )
+        _trigger_emergency_shutdown_disk(snapshot)
+    else:
+        _resolve_alert_code("DISK_SPACE_FATAL")
+    return snapshot
 
 
 def _restart_settings_snapshot() -> dict:
@@ -3154,6 +3415,10 @@ def _restart_settings_snapshot() -> dict:
         target = "operador"
     enabled = _setting_get_bool(raw, "auto_restart_enabled", False)
     interval_min = max(5, _setting_get_int(raw, "auto_restart_interval_min", 240))
+    crash_enabled = _setting_get_bool(raw, "auto_restart_crash_enabled", True)
+    crash_cooldown_sec = max(5, _setting_get_int(raw, "auto_restart_crash_cooldown_sec", 15))
+    crash_max_attempts = max(1, _setting_get_int(raw, "auto_restart_crash_max_attempts", 6))
+    crash_window_sec = max(crash_cooldown_sec, _setting_get_int(raw, "auto_restart_crash_window_sec", 300))
     next_at = str(raw.get("auto_restart_next_at", "") or "").strip()
     next_dt = _parse_iso_utc_or_none(next_at)
     if enabled and next_dt is None:
@@ -3168,6 +3433,10 @@ def _restart_settings_snapshot() -> dict:
         "target": target,
         "next_restart_at": next_at,
         "seconds_remaining": max(0, remaining) if remaining is not None else None,
+        "crash_enabled": crash_enabled,
+        "crash_cooldown_sec": crash_cooldown_sec,
+        "crash_max_attempts": crash_max_attempts,
+        "crash_window_sec": crash_window_sec,
     }
 
 
@@ -3193,7 +3462,16 @@ def _alerts_settings_snapshot() -> dict:
     }
 
 
-def _set_restart_config(enabled: bool, interval_minutes: int, target: str) -> dict:
+def _set_restart_config(
+    enabled: bool,
+    interval_minutes: int,
+    target: str,
+    *,
+    crash_enabled: bool | None = None,
+    crash_cooldown_sec: int | None = None,
+    crash_max_attempts: int | None = None,
+    crash_window_sec: int | None = None,
+) -> dict:
     t = str(target or "operador").strip().lower()
     if t not in RESTART_TARGETS:
         raise HTTPException(status_code=400, detail="target inválido: operador|lector|both")
@@ -3205,6 +3483,14 @@ def _set_restart_config(enabled: bool, interval_minutes: int, target: str) -> di
     if bool(enabled):
         next_at = _uy_from_epoch_iso(time.time() + (interval * 60))
     _setting_set("auto_restart_next_at", str(next_at))
+    if crash_enabled is not None:
+        _setting_set("auto_restart_crash_enabled", "true" if bool(crash_enabled) else "false")
+    if crash_cooldown_sec is not None:
+        _setting_set("auto_restart_crash_cooldown_sec", str(max(5, int(crash_cooldown_sec))))
+    if crash_max_attempts is not None:
+        _setting_set("auto_restart_crash_max_attempts", str(max(1, int(crash_max_attempts))))
+    if crash_window_sec is not None:
+        _setting_set("auto_restart_crash_window_sec", str(max(10, int(crash_window_sec))))
     return _restart_settings_snapshot()
 
 
@@ -3297,20 +3583,98 @@ def _schedule_next_restart() -> None:
     _setting_set("auto_restart_next_at", _uy_from_epoch_iso(next_ts))
 
 
+def _crash_watchdog_specs() -> list[tuple[str, ProcessManager, str]]:
+    return [
+        (PROCESS_NAME_LECTOR, lector_manager, "lector"),
+        (PROCESS_NAME_OPERADOR, operador_manager, "operador"),
+    ]
+
+
+def _clear_crash_watchdog_state(process_name: str) -> None:
+    pname = str(process_name).strip().lower()
+    with crash_watchdog_lock:
+        crash_restart_history[pname] = []
+        crash_restart_next_try_ts[pname] = 0.0
+
+
+def _run_crash_watchdog_once(snap: dict) -> None:
+    if not bool(snap.get("crash_enabled")):
+        return
+    now = time.time()
+    cooldown = max(5, int(snap.get("crash_cooldown_sec") or 15))
+    max_attempts = max(1, int(snap.get("crash_max_attempts") or 6))
+    window_sec = max(cooldown, int(snap.get("crash_window_sec") or 300))
+
+    for pname, manager, target in _crash_watchdog_specs():
+        up = manager.running()
+        wanted = bool(getattr(manager, "desired_running", False))
+
+        if up or not wanted:
+            _clear_crash_watchdog_state(pname)
+            _resolve_alert_code(f"CRASH_RESTART_FAILED_{pname.upper()}")
+            _resolve_alert_code(f"CRASH_RESTART_LOOP_{pname.upper()}")
+            continue
+
+        with crash_watchdog_lock:
+            next_try = float(crash_restart_next_try_ts.get(pname, 0.0))
+            if now < next_try:
+                continue
+            hist = [ts for ts in crash_restart_history.get(pname, []) if (now - float(ts)) <= float(window_sec)]
+            if len(hist) >= max_attempts:
+                crash_restart_history[pname] = hist
+                crash_restart_next_try_ts[pname] = now + float(window_sec)
+                _upsert_alert(
+                    source="watchdog",
+                    code=f"CRASH_RESTART_LOOP_{pname.upper()}",
+                    severity="critical",
+                    title=f"Crash loop en {pname.upper()}",
+                    details=(
+                        f"{pname} cayó repetidamente. attempts={len(hist)} window_sec={window_sec}. "
+                        f"Se pausa auto-restart por {window_sec}s."
+                    ),
+                    data={"process": pname, "attempts": len(hist), "window_sec": window_sec},
+                )
+                continue
+            hist.append(now)
+            crash_restart_history[pname] = hist
+            crash_restart_next_try_ts[pname] = now + float(cooldown)
+
+        result = _perform_controlled_restart(target=target, reason="crash_watchdog")
+        status = str(result.get("status") or "")
+        if status == "ok":
+            _resolve_alert_code(f"CRASH_RESTART_FAILED_{pname.upper()}")
+            _resolve_alert_code(f"CRASH_RESTART_LOOP_{pname.upper()}")
+            _upsert_alert(
+                source="watchdog",
+                code=f"CRASH_RESTARTED_{pname.upper()}",
+                severity="warning",
+                title=f"Reinicio automático por crash ({pname.upper()})",
+                details=f"{pname} cayó y fue reiniciado automáticamente.",
+                data={"process": pname, "last_exit": manager.last_exit, "reason": "crash_watchdog"},
+            )
+            _clear_crash_watchdog_state(pname)
+        else:
+            _upsert_alert(
+                source="watchdog",
+                code=f"CRASH_RESTART_FAILED_{pname.upper()}",
+                severity="critical",
+                title=f"Fallo en auto-restart por crash ({pname.upper()})",
+                details=f"No se pudo reiniciar {pname}. status={status}. errors={result.get('errors')}",
+                data={"process": pname, "status": status, "result": result},
+            )
+
+
 def _restart_worker_loop():
     while True:
         try:
             snap = _restart_settings_snapshot()
-            if not snap["enabled"]:
-                time.sleep(1.0)
-                continue
-            remaining = snap["seconds_remaining"]
-            if remaining is None or remaining > 0:
-                time.sleep(1.0)
-                continue
-            result = _perform_controlled_restart(snap["target"], reason="scheduled")
-            if result.get("status") != "postponed":
-                _schedule_next_restart()
+            _run_crash_watchdog_once(snap)
+            if snap["enabled"]:
+                remaining = snap["seconds_remaining"]
+                if remaining is not None and remaining <= 0:
+                    result = _perform_controlled_restart(snap["target"], reason="scheduled")
+                    if result.get("status") != "postponed":
+                        _schedule_next_restart()
             time.sleep(1.0)
         except Exception:
             time.sleep(2.0)
@@ -3695,6 +4059,8 @@ def _alerts_worker_loop():
     while True:
         try:
             cfg = _alerts_settings_snapshot()
+            # Guardia de almacenamiento siempre activa, aunque las alertas operativas estén deshabilitadas.
+            _evaluate_storage_alerts(send_threshold_alerts=bool(cfg["alerts_enabled"]))
             if cfg["alerts_enabled"]:
                 _evaluate_alerts_once()
                 _dispatch_pending_discord_alerts()
@@ -3846,8 +4212,12 @@ def _alerts_history(page: int, page_size: int, from_ts: str | None = None, to_ts
 
 def _retention_settings_snapshot() -> dict:
     raw = _settings_values()
+    requested_enabled = _setting_get_bool(raw, "retention_enabled", False)
+    effective_enabled = bool(requested_enabled) and (not NO_DELETE_POLICY)
     return {
-        "enabled": _setting_get_bool(raw, "retention_enabled", True),
+        "enabled": effective_enabled,
+        "requested_enabled": bool(requested_enabled),
+        "no_delete_policy": bool(NO_DELETE_POLICY),
         "interval_min": max(5, _setting_get_int(raw, "retention_run_interval_min", 60)),
         "archive_enabled": _setting_get_bool(raw, "retention_archive_enabled", True),
         "strategy_days": max(7, _setting_get_int(raw, "retention_strategy_days", 180)),
@@ -3926,6 +4296,8 @@ def _retention_cleanup_table(
 
 def _run_retention_once() -> dict:
     cfg = _retention_settings_snapshot()
+    if bool(NO_DELETE_POLICY):
+        return {"status": "disabled_no_delete_policy", "deleted": 0}
     if not cfg["enabled"]:
         return {"status": "disabled", "deleted": 0}
     now = datetime.now(URUGUAY_TZ)
@@ -3997,18 +4369,102 @@ def _start_background_workers_once() -> None:
     threading.Thread(target=_retention_worker_loop, daemon=True, name="retention-worker").start()
 
 
+def _merge_health_status(current: str, candidate: str) -> str:
+    rank = {"ok": 0, "degraded": 1, "error": 2}
+    cur = str(current or "ok").strip().lower()
+    nxt = str(candidate or "ok").strip().lower()
+    if rank.get(nxt, 0) > rank.get(cur, 0):
+        return nxt
+    return cur
+
+
+def _health_snapshot() -> dict:
+    status = "ok"
+    checks: dict[str, dict] = {}
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    try:
+        with _db_conn() as conn:
+            conn.execute("SELECT 1").fetchone()
+        checks["db"] = {"ok": True}
+    except Exception as exc:
+        checks["db"] = {"ok": False, "error": str(exc)}
+        status = _merge_health_status(status, "error")
+        errors.append("db_unavailable")
+
+    storage = _project_storage_snapshot()
+    free_bytes = int(storage.get("disk_free_bytes") or 0)
+    checks["storage"] = {
+        "project_gb": storage.get("project_gb"),
+        "disk_free_gb": storage.get("disk_free_gb"),
+        "disk_free_bytes": free_bytes,
+    }
+    if free_bytes <= int(DISK_FREE_FATAL_BYTES):
+        status = _merge_health_status(status, "error")
+        errors.append("disk_free_below_fatal_threshold")
+    elif free_bytes <= int(DISK_FREE_FATAL_BYTES) * 2:
+        status = _merge_health_status(status, "degraded")
+        warnings.append("disk_free_low")
+
+    queue_stats = _queue_pending_stats()
+    alert_cfg = _alerts_settings_snapshot()
+    checks["queue"] = dict(queue_stats)
+    if int(queue_stats["count"]) >= int(alert_cfg["alerts_queue_pending_threshold"]):
+        status = _merge_health_status(status, "degraded")
+        warnings.append("queue_pending_backlog")
+    if int(queue_stats["oldest_age_sec"]) >= int(alert_cfg["alerts_queue_oldest_sec"]):
+        status = _merge_health_status(status, "degraded")
+        warnings.append("queue_pending_old")
+
+    runtime: dict[str, dict] = {}
+    for pname, manager, _target in _crash_watchdog_specs():
+        running = bool(manager.running())
+        wanted = bool(getattr(manager, "desired_running", False))
+        runtime[pname] = {
+            "running": running,
+            "desired_running": wanted,
+            "last_exit": manager.last_exit,
+            "pid": manager.proc.pid if manager.proc else None,
+        }
+        if wanted and not running:
+            status = _merge_health_status(status, "error")
+            errors.append(f"{pname}_down_unexpected")
+        elif not running:
+            status = _merge_health_status(status, "degraded")
+            warnings.append(f"{pname}_stopped")
+    checks["runtime"] = runtime
+
+    if bool(emergency_shutdown_triggered):
+        status = _merge_health_status(status, "error")
+        errors.append("emergency_shutdown_triggered")
+
+    return {
+        "status": status,
+        "ts": _utc_now_iso(),
+        "checks": checks,
+        "warnings": sorted(set(warnings)),
+        "errors": sorted(set(errors)),
+    }
+
+
 @app.middleware("http")
-async def require_basic_auth(request: Request, call_next):
+async def require_web_auth_session(request: Request, call_next):
     # Salud local mínima sin auth estricta para facilitar diagnosis local.
-    if request.url.path == "/healthz":
-        return JSONResponse({"status": "ok"})
-    if not _is_auth_valid(request):
-        return Response(
-            status_code=401,
-            content="Unauthorized",
-            headers={"WWW-Authenticate": 'Basic realm="TradingBot"'},
-            media_type="text/plain",
-        )
+    path = str(request.url.path or "")
+    if path == "/healthz":
+        return await call_next(request)
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    if path.startswith("/static/"):
+        return await call_next(request)
+    if path in ("/api/web-auth/login", "/api/web-auth/me", "/api/web-auth/logout"):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        user = _get_web_session_user(request)
+        if not user:
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        request.state.web_user = user
     return await call_next(request)
 
 
@@ -4108,6 +4564,13 @@ def tutorial_page():
     return HTMLResponse(html)
 
 
+@app.get("/healthz")
+def healthz():
+    snap = _health_snapshot()
+    http_code = 200 if str(snap.get("status")) in ("ok", "degraded") else 503
+    return JSONResponse(snap, status_code=http_code)
+
+
 @app.get("/api/status")
 def status():
     presets = _list_operator_presets()
@@ -4115,6 +4578,8 @@ def status():
     profiles = _list_execution_profiles()
     restart_cfg = _restart_settings_snapshot()
     queue_stats = _queue_pending_stats()
+    storage_stats = _project_storage_snapshot()
+    health = _health_snapshot()
     with _db_conn() as conn:
         open_ops = int(
             conn.execute(
@@ -4130,6 +4595,8 @@ def status():
             "operador_defaults": _get_operator_defaults(),
             "auto_restart": restart_cfg,
             "queue_pending": queue_stats,
+            "storage": storage_stats,
+            "health": health,
             "counts": {
                 "channels": len(_list_channels()),
                 "presets": len(presets),
@@ -4151,6 +4618,46 @@ def status():
             },
         }
     )
+
+
+@app.get("/api/web-auth/me")
+def web_auth_me(request: Request):
+    user = _get_web_session_user(request)
+    if not user:
+        return JSONResponse({"authenticated": False, "username": ""})
+    return JSONResponse({"authenticated": True, "username": user})
+
+
+@app.post("/api/web-auth/login")
+def web_auth_login(payload: WebAuthLoginPayload):
+    username = str(payload.username or "").strip()
+    password = str(payload.password or "")
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="usuario y contraseña requeridos")
+    if not _is_web_login_valid(username, password):
+        raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
+    token = _create_web_session(username)
+    res = JSONResponse({"authenticated": True, "username": username})
+    res.set_cookie(
+        key=WEB_SESSION_COOKIE_NAME,
+        value=token,
+        max_age=WEB_SESSION_TTL_SEC,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=False,
+    )
+    return res
+
+
+@app.post("/api/web-auth/logout")
+def web_auth_logout(request: Request):
+    token = str(request.cookies.get(WEB_SESSION_COOKIE_NAME, "") or "").strip()
+    if token:
+        _clear_web_session(token)
+    res = JSONResponse({"ok": True})
+    res.delete_cookie(key=WEB_SESSION_COOKIE_NAME, path="/")
+    return res
 
 
 @app.post("/api/web-auth/verify-password")
@@ -4773,6 +5280,10 @@ def restart_config_put(payload: RestartConfigPayload):
         enabled=bool(payload.enabled),
         interval_minutes=int(payload.interval_minutes),
         target=str(payload.target or "operador"),
+        crash_enabled=payload.crash_enabled,
+        crash_cooldown_sec=payload.crash_cooldown_sec,
+        crash_max_attempts=payload.crash_max_attempts,
+        crash_window_sec=payload.crash_window_sec,
     )
     return JSONResponse({"status": "updated", "config": config})
 

@@ -1,10 +1,24 @@
 import MetaTrader5 as mt5
 import pandas as pd
 import time
+import os
 
 # --- Configuración ---
 CSV_FILE = 'ordenes_enviadas.csv'
-ACCOUNT_NUMBER = 166467033  # Asegúrate de que sea la cuenta correcta
+
+
+def _get_env_or_prompt_int(name, prompt):
+    value = str(os.getenv(name, "") or "").strip()
+    while not value:
+        value = str(input(prompt) or "").strip()
+    while True:
+        try:
+            return int(value)
+        except Exception:
+            value = str(input(f"{prompt} (valor inválido, intenta de nuevo): ") or "").strip()
+
+
+ACCOUNT_NUMBER = _get_env_or_prompt_int("MT5_LOGIN", "MT5_LOGIN: ")
 
 def verificar_orden():
     """Verifica si la última orden ENVIADA desde el script coincide con alguna entrada en el CSV."""

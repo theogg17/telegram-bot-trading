@@ -5,6 +5,7 @@ import os
 import json
 import uuid
 import sqlite3
+import sys
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -15,6 +16,9 @@ except Exception:
 # Path to the channels DB CSV file (adjust to your actual path)
 BASE_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.dirname(BASE_DIR)
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+from common.csv_guard import atomic_write_dataframe_csv, csv_file_lock
 TRADING_BOT_DB_PATH = os.getenv(
     "TRADING_BOT_DB_PATH",
     os.path.join(ROOT_DIR, "config", "trading_bot.db"),
@@ -45,6 +49,16 @@ SIGNALS_COLUMNS = [
 NON_SIGNALS_COLUMNS = [
     'timestamp', 'message_id', 'reply_to', 'channel', 'text', 'reason'
 ]
+
+
+def _append_row_locked(filename, row_df, columns):
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    with csv_file_lock(filename):
+        ordered = row_df.reindex(columns=columns)
+        if not os.path.exists(filename):
+            atomic_write_dataframe_csv(ordered, filename, index=False, columns=columns)
+        else:
+            ordered.to_csv(filename, mode='a', header=False, index=False, columns=columns)
 
 def _normalize_to_schema(df: pd.DataFrame) -> pd.DataFrame:
     # agrega las que falten
@@ -81,18 +95,19 @@ def _ensure_csv_schema(filename=DEFAULT_SIGNALS_CSV):
     """Si el CSV existe con columnas viejas o filas inconsistentes, normaliza al esquema nuevo."""
     if not os.path.exists(filename):
         return
-    try:
-        df = pd.read_csv(filename)
-        df = _normalize_to_schema(df)
-        df.to_csv(filename, index=False)
-    except Exception:
-        # lectura tolerante si hay líneas inválidas
+    with csv_file_lock(filename):
         try:
-            df = pd.read_csv(filename, on_bad_lines='skip', engine='python', header=0)
+            df = pd.read_csv(filename)
             df = _normalize_to_schema(df)
-            df.to_csv(filename, index=False)
-        except Exception as e:
-            print(f"Warning: could not normalize {filename}: {e}")
+            atomic_write_dataframe_csv(df, filename, index=False)
+        except Exception:
+            # lectura tolerante si hay líneas inválidas
+            try:
+                df = pd.read_csv(filename, on_bad_lines='skip', engine='python', header=0)
+                df = _normalize_to_schema(df)
+                atomic_write_dataframe_csv(df, filename, index=False)
+            except Exception as e:
+                print(f"Warning: could not normalize {filename}: {e}")
 
 def _load_channel_index_mapping():
     """Loads the channel to index mapping from CHANNELS_DB_PATH."""
@@ -327,11 +342,7 @@ def save_trade(trade_data, filename=DEFAULT_SIGNALS_CSV):
 
     ordered_data = {col: trade_data.get(col, '') for col in SIGNALS_COLUMNS}
     df = pd.DataFrame([ordered_data])
-
-    if not os.path.exists(filename):
-        df.to_csv(filename, index=False, columns=SIGNALS_COLUMNS)
-    else:
-        df.to_csv(filename, mode='a', header=False, index=False, columns=SIGNALS_COLUMNS)
+    _append_row_locked(filename, df, SIGNALS_COLUMNS)
     try:
         _save_trade_sqlite(ordered_data)
     except Exception as e:
@@ -342,58 +353,64 @@ def save_non_signal(data, filename=DEFAULT_NON_SIGNALS_CSV):
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     row = {col: data.get(col, '') for col in NON_SIGNALS_COLUMNS}
     df = pd.DataFrame([row])
-    if not os.path.exists(filename):
-        df.to_csv(filename, index=False, columns=NON_SIGNALS_COLUMNS)
-    else:
-        df.to_csv(filename, mode='a', header=False, index=False, columns=NON_SIGNALS_COLUMNS)
+    _append_row_locked(filename, df, NON_SIGNALS_COLUMNS)
 
 
 def update_trade(trade_id, close_data, filename=DEFAULT_SIGNALS_CSV):
     """Updates an existing trade in the CSV file with closing information."""
-    try:
-        signals_df = pd.read_csv(filename)
-    except FileNotFoundError:
-        print(f"Error: File not found: {filename}")
-        return
-
-    if 'message_id' not in signals_df.columns:
-        print("Error: 'message_id' column not found in the CSV.")
-        return
-
-    trade_index = signals_df[signals_df['message_id'] == trade_id].index
-    if not trade_index.empty:
-        for key, value in close_data.items():
-            if key in signals_df.columns:
-                signals_df.at[trade_index[0], key] = value
-
-        # Reorder columns before saving
-        signals_df = signals_df.reindex(columns=SIGNALS_COLUMNS)
-        signals_df.to_csv(filename, index=False)
+    with csv_file_lock(filename):
+        try:
+            signals_df = pd.read_csv(filename)
+        except FileNotFoundError:
+            print(f"Error: File not found: {filename}")
+            return
+        except Exception:
+            signals_df = pd.read_csv(filename, on_bad_lines='skip', engine='python', header=0)
+        if 'message_id' not in signals_df.columns:
+            print("Error: 'message_id' column not found in the CSV.")
+            return
+        trade_index = signals_df[signals_df['message_id'] == trade_id].index
+        if not trade_index.empty:
+            for key, value in close_data.items():
+                if key in signals_df.columns:
+                    signals_df.at[trade_index[0], key] = value
+            # Reorder columns before saving
+            signals_df = signals_df.reindex(columns=SIGNALS_COLUMNS)
+            atomic_write_dataframe_csv(signals_df, filename, index=False)
 
 def read_signals(filename=DEFAULT_SIGNALS_CSV):
     """Lee el CSV de manera robusta. Si hay problemas de parseo, los corrige y devuelve un DF normalizado."""
     if not os.path.exists(filename):
         # devolver DF vacío con columnas correctas
         return pd.DataFrame(columns=SIGNALS_COLUMNS)
-
-    try:
-        df = pd.read_csv(filename)
-        return _normalize_to_schema(df)
-    except pd.errors.ParserError:
-        # si hay filas con diferente número de campos, las salteamos una vez y normalizamos
-        df = pd.read_csv(filename, on_bad_lines='skip', engine='python', header=0)
-        df = _normalize_to_schema(df)
-        df.to_csv(filename, index=False)
-        return df
-    except Exception as e:
-        print(f"Error reading {filename}: {e}")
-        return pd.DataFrame(columns=SIGNALS_COLUMNS)
+    with csv_file_lock(filename):
+        try:
+            df = pd.read_csv(filename)
+            return _normalize_to_schema(df)
+        except pd.errors.ParserError:
+            # si hay filas con diferente número de campos, las salteamos una vez y normalizamos
+            df = pd.read_csv(filename, on_bad_lines='skip', engine='python', header=0)
+            df = _normalize_to_schema(df)
+            atomic_write_dataframe_csv(df, filename, index=False)
+            return df
+        except Exception as e:
+            print(f"Error reading {filename}: {e}")
+            return pd.DataFrame(columns=SIGNALS_COLUMNS)
 
 
 def trade_exists(trade_id, filename=DEFAULT_SIGNALS_CSV):
     """Checks if a trade with a given message_id exists in the CSV."""
-    try:
-        signals_df = pd.read_csv(filename)
-        return trade_id in signals_df['message_id'].values
-    except FileNotFoundError:
+    if not os.path.exists(filename):
         return False
+    with csv_file_lock(filename):
+        try:
+            signals_df = pd.read_csv(filename)
+            return trade_id in signals_df['message_id'].values
+        except FileNotFoundError:
+            return False
+        except Exception:
+            try:
+                signals_df = pd.read_csv(filename, on_bad_lines='skip', engine='python', header=0)
+                return trade_id in signals_df['message_id'].values
+            except Exception:
+                return False

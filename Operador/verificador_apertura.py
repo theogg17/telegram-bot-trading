@@ -2,6 +2,7 @@ import argparse
 import csv
 import datetime
 import os
+import sys
 import time
 try:
     from zoneinfo import ZoneInfo
@@ -19,6 +20,10 @@ from config_operador import (
     AUTO_CLOSE_ON_MISMATCH,
 )
 from daemon import mt5_init
+ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+from common.csv_guard import atomic_write_dataframe_csv, csv_file_lock
 
 URUGUAY_TZ = ZoneInfo('America/Montevideo') if ZoneInfo is not None else datetime.timezone(datetime.timedelta(hours=-3))
 
@@ -29,16 +34,21 @@ ERROR_FIELDS = ["timestamp","event_id","action","symbol","side","volume","commen
 
 def _ensure_csv(path: str, fieldnames: list):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    if not os.path.exists(path):
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=fieldnames)
-            w.writeheader()
+    with csv_file_lock(path):
+        if not os.path.exists(path):
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=fieldnames)
+                w.writeheader()
 
 def _append_row(path: str, row: dict, fieldnames: list):
-    _ensure_csv(path, fieldnames)
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writerow(row)
+    with csv_file_lock(path):
+        if not os.path.exists(path):
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=fieldnames)
+                w.writeheader()
+        with open(path, "a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writerow(row)
 
 def _snapshot_operations():
     rows = []
@@ -72,7 +82,8 @@ def _snapshot_operations():
             "time": datetime.datetime.fromtimestamp(o.time_setup, URUGUAY_TZ).isoformat(timespec="seconds"),
         })
     df = pd.DataFrame(rows, columns=OPERACIONES_FIELDS)
-    df.to_csv(OPERACIONES_ABIERTAS_CSV, index=False, encoding="utf-8")
+    with csv_file_lock(OPERACIONES_ABIERTAS_CSV):
+        atomic_write_dataframe_csv(df, OPERACIONES_ABIERTAS_CSV, index=False, encoding="utf-8")
     return positions, orders
 
 def _log_error(action, symbol, side, volume, comment, reason, details=""):

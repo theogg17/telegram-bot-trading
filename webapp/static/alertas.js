@@ -89,6 +89,9 @@ function toIsoForApi(localValue, isEnd = false) {
 }
 
 function fmtTs(value) {
+  if (window.dateTime24 && typeof window.dateTime24.formatDisplayDateTime === "function") {
+    return window.dateTime24.formatDisplayDateTime(value);
+  }
   if (!value) {
     return "-";
   }
@@ -97,7 +100,7 @@ function fmtTs(value) {
     return String(value);
   }
   const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function renderAlertRows(tbodyEl, items) {

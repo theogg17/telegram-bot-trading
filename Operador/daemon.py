@@ -1,5 +1,5 @@
 # Operador/daemon.py
-import os, time, csv, datetime, hashlib, json, sqlite3, re
+import os, time, csv, datetime, hashlib, json, sqlite3, re, sys
 import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
@@ -24,6 +24,9 @@ from config_operador import (
 
 BASE_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.dirname(BASE_DIR)
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+from common.csv_guard import atomic_write_dataframe_csv, csv_file_lock
 TRADING_BOT_DB_PATH = os.getenv("TRADING_BOT_DB_PATH", os.path.join(ROOT_DIR, "config", "trading_bot.db"))
 QUEUE_FAILED_DIR = os.path.join(ROOT_DIR, "queue", "failed")
 QUEUE_MAX_RETRIES = max(1, int(os.getenv("QUEUE_MAX_RETRIES", "5")))
@@ -47,26 +50,32 @@ if STARTUP_RECONCILE_MODE not in ("warn", "close"):
     STARTUP_RECONCILE_MODE = "warn"
 
 # =============== utilidades CSV básicas ===============
-def _ensure_csv(path: str, fieldnames: list):
+def _ensure_csv_unlocked(path: str, fieldnames: list):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if not os.path.exists(path):
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=fieldnames)
             w.writeheader()
 
+def _ensure_csv(path: str, fieldnames: list):
+    with csv_file_lock(path):
+        _ensure_csv_unlocked(path, fieldnames)
+
 def _append_row(path: str, row: dict, fieldnames: list):
-    _ensure_csv(path, fieldnames)
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writerow(row)
+    with csv_file_lock(path):
+        _ensure_csv_unlocked(path, fieldnames)
+        with open(path, "a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writerow(row)
 
 def _load_df(path: str, fields=None):
     if not os.path.exists(path):
         return pd.DataFrame(columns=fields or [])
-    try:
-        return pd.read_csv(path)
-    except Exception:
-        return pd.read_csv(path, on_bad_lines='skip', engine='python')
+    with csv_file_lock(path):
+        try:
+            return pd.read_csv(path)
+        except Exception:
+            return pd.read_csv(path, on_bad_lines='skip', engine='python')
 
 def _normalize_id(value):
     if value is None:
@@ -3029,6 +3038,11 @@ OPEN_TRADES_FIELDS = [
 ]
 
 def _ensure_open_trades():
+    with csv_file_lock(OPEN_TRADES_CSV):
+        _ensure_open_trades_unlocked()
+
+
+def _ensure_open_trades_unlocked():
     os.makedirs(os.path.dirname(OPEN_TRADES_CSV), exist_ok=True)
     if not os.path.exists(OPEN_TRADES_CSV):
         with open(OPEN_TRADES_CSV, "w", newline="", encoding="utf-8") as f:
@@ -3038,29 +3052,40 @@ def _ensure_open_trades():
 def _load_open_trades() -> pd.DataFrame:
     if not os.path.exists(OPEN_TRADES_CSV):
         return pd.DataFrame(columns=OPEN_TRADES_FIELDS)
+    with csv_file_lock(OPEN_TRADES_CSV):
+        return _load_open_trades_unlocked()
+
+
+def _load_open_trades_unlocked() -> pd.DataFrame:
     try:
         return pd.read_csv(OPEN_TRADES_CSV)
     except Exception:
         return pd.read_csv(OPEN_TRADES_CSV, on_bad_lines="skip", engine="python")
 
 def _save_open_trades(df: pd.DataFrame):
-    df = df.reindex(columns=OPEN_TRADES_FIELDS)
-    df.to_csv(OPEN_TRADES_CSV, index=False, encoding="utf-8")
+    with csv_file_lock(OPEN_TRADES_CSV):
+        _save_open_trades_unlocked(df)
+
+
+def _save_open_trades_unlocked(df: pd.DataFrame):
+    ordered = df.reindex(columns=OPEN_TRADES_FIELDS)
+    atomic_write_dataframe_csv(ordered, OPEN_TRADES_CSV, index=False, encoding="utf-8")
 
 
 def open_trades_delete_by_tickets(tickets):
     tset = _ticket_set(tickets)
     if not tset:
         return
-    _ensure_open_trades()
-    df = _load_open_trades()
-    if df.empty or "ticket" not in df.columns:
-        return
-    ticket_col = df["ticket"].apply(_normalize_id)
-    keep = ~ticket_col.isin({str(t) for t in tset})
-    cleaned = df.loc[keep]
-    if len(cleaned) != len(df):
-        _save_open_trades(cleaned)
+    with csv_file_lock(OPEN_TRADES_CSV):
+        _ensure_open_trades_unlocked()
+        df = _load_open_trades_unlocked()
+        if df.empty or "ticket" not in df.columns:
+            return
+        ticket_col = df["ticket"].apply(_normalize_id)
+        keep = ~ticket_col.isin({str(t) for t in tset})
+        cleaned = df.loc[keep]
+        if len(cleaned) != len(df):
+            _save_open_trades_unlocked(cleaned)
 
 def _open_key_mask(df, channel_index, entry_message_id, style=None):
     m = (df["channel_index"].astype(str)==str(channel_index)) & (df["entry_message_id"].astype(str)==str(entry_message_id))
@@ -3069,39 +3094,42 @@ def _open_key_mask(df, channel_index, entry_message_id, style=None):
     return m
 
 def open_trades_upsert(row: dict):
-    _ensure_open_trades()
-    df = _load_open_trades()
-    mask = _open_key_mask(df, row["channel_index"], row["entry_message_id"], row["style"])
-    if df[mask].empty:
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    else:
-        df.loc[mask, list(row.keys())] = list(row.values())
-    _save_open_trades(df)
+    with csv_file_lock(OPEN_TRADES_CSV):
+        _ensure_open_trades_unlocked()
+        df = _load_open_trades_unlocked()
+        mask = _open_key_mask(df, row["channel_index"], row["entry_message_id"], row["style"])
+        if df[mask].empty:
+            df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        else:
+            df.loc[mask, list(row.keys())] = list(row.values())
+        _save_open_trades_unlocked(df)
 
 def open_trades_update_sl_tp(channel_index, entry_message_id, styles, new_sl=None, new_tp=None):
-    _ensure_open_trades()
-    df = _load_open_trades()
-    sl_val = _parse_float_or_none(new_sl)
-    tp_val = _parse_float_or_none(new_tp)
-    changed = False
-    for st in styles:
-        mask = _open_key_mask(df, channel_index, entry_message_id, st)
-        if not df[mask].empty:
-            if sl_val is not None:
-                df.loc[mask, "sl"] = float(sl_val)
-                changed = True
-            if tp_val is not None:
-                df.loc[mask, "tp"] = float(tp_val)
-                changed = True
-    if changed:
-        _save_open_trades(df)
+    with csv_file_lock(OPEN_TRADES_CSV):
+        _ensure_open_trades_unlocked()
+        df = _load_open_trades_unlocked()
+        sl_val = _parse_float_or_none(new_sl)
+        tp_val = _parse_float_or_none(new_tp)
+        changed = False
+        for st in styles:
+            mask = _open_key_mask(df, channel_index, entry_message_id, st)
+            if not df[mask].empty:
+                if sl_val is not None:
+                    df.loc[mask, "sl"] = float(sl_val)
+                    changed = True
+                if tp_val is not None:
+                    df.loc[mask, "tp"] = float(tp_val)
+                    changed = True
+        if changed:
+            _save_open_trades_unlocked(df)
 def open_trades_delete(channel_index, entry_message_id, styles):
-    _ensure_open_trades()
-    df = _load_open_trades()
-    for st in styles:
-        mask = _open_key_mask(df, channel_index, entry_message_id, st)
-        df = df.loc[~mask]
-    _save_open_trades(df)
+    with csv_file_lock(OPEN_TRADES_CSV):
+        _ensure_open_trades_unlocked()
+        df = _load_open_trades_unlocked()
+        for st in styles:
+            mask = _open_key_mask(df, channel_index, entry_message_id, st)
+            df = df.loc[~mask]
+        _save_open_trades_unlocked(df)
 
 
 def open_trades_has_open_entry(channel_index, entry_message_id):

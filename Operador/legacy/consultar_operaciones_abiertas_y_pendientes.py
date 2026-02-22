@@ -1,10 +1,26 @@
 import MetaTrader5 as mt5
 import time
+import os
+import getpass
+
+
+def _get_env_or_prompt(name, prompt, cast=None, secret=False):
+    value = str(os.getenv(name, "") or "").strip()
+    while not value:
+        value = getpass.getpass(prompt) if secret else input(prompt)
+        value = str(value or "").strip()
+    if cast is not None:
+        while True:
+            try:
+                return cast(value)
+            except Exception:
+                value = str(input(f"{prompt} (valor inválido, intenta de nuevo): ") or "").strip()
+    return value
 
 # Introduce tus credenciales
-login = 166467033
-password = "Hola2001//"
-server = "XMGlobal-MT5 2"  # Ejemplo: "ICMarkets-Live"
+login = _get_env_or_prompt("MT5_LOGIN", "MT5_LOGIN: ", cast=int)
+password = _get_env_or_prompt("MT5_PASSWORD", "MT5_PASSWORD: ", secret=True)
+server = _get_env_or_prompt("MT5_SERVER", "MT5_SERVER: ")  # Ejemplo: "ICMarkets-Live"
 
 # Inicializar la conexión a MetaTrader 5
 if not mt5.initialize():
