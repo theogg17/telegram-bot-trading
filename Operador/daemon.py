@@ -1839,17 +1839,38 @@ def mt5_init():
     if not TERMINAL_PATH or not os.path.exists(TERMINAL_PATH):
         raise RuntimeError(f"MT5 terminal no encontrado: {TERMINAL_PATH}")
 
-    # Inicializar sin credenciales y luego hacer login explícito.
-    if not mt5.initialize(
+    server = str(MT5_SERVER).strip()
+    login = int(MT5_LOGIN)
+    password = str(MT5_PASSWORD)
+
+    # Algunos terminales fallan con "Authorization failed" si se inicializan
+    # usando una sesion guardada vieja. Primero inicializamos ya autenticando.
+    init_ok = mt5.initialize(
         path=TERMINAL_PATH,
+        login=login,
+        password=password,
+        server=server,
         timeout=MT5_TIMEOUT_MS,
         portable=MT5_PORTABLE,
-    ):
-        raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
+    )
+    init_error = mt5.last_error()
+    if not init_ok:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        # Fallback compatible con instalaciones donde el terminal necesita
+        # abrir primero y loguear despues.
+        init_ok = mt5.initialize(
+            path=TERMINAL_PATH,
+            timeout=MT5_TIMEOUT_MS,
+            portable=MT5_PORTABLE,
+        )
+        if not init_ok:
+            raise RuntimeError(f"MT5 initialize failed: {init_error}; fallback={mt5.last_error()}")
 
     time.sleep(0.5)
-    server = str(MT5_SERVER).strip()
-    if not mt5.login(login=int(MT5_LOGIN), password=str(MT5_PASSWORD), server=server):
+    if not mt5.login(login=login, password=password, server=server):
         raise RuntimeError(f"MT5 login failed: {mt5.last_error()}")
 
     if SYMBOLS_ALWAYS_SELECT:
