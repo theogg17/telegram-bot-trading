@@ -602,6 +602,7 @@
   window.showSavedToast = showSavedToast;
   window.applyGlobalHeaderStatus = applyGlobalHeaderStatus;
   window.refreshGlobalHeaderStatus = refreshGlobalHeaderStatus;
+  window.webAuthReadyPromise = webAuthReadyPromise;
   window.setHeaderUser = setHeaderUser;
   window.dateTime24 = {
     normalizeForApi,

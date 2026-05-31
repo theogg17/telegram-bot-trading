@@ -20,6 +20,7 @@ const controlErrorsBody = document.getElementById("control-errors-body");
 const lectorLines = [];
 const operadorLines = [];
 let restartRemaining = null;
+let logStreamsStarted = false;
 
 function showSavedToast(message) {
   if (typeof window.showSavedToast === "function") {
@@ -206,16 +207,6 @@ async function refreshStatus() {
     restartNextAt.value = fmtTs(restart.next_restart_at || "");
     restartRemaining = Number.isFinite(Number(restart.seconds_remaining)) ? Number(restart.seconds_remaining) : null;
     restartCountdown.value = restartRemaining == null ? "-" : fmtCountdown(restartRemaining);
-    const defaults = data.operador_defaults || {};
-    if (!document.getElementById("mt5_terminal_path").value.trim()) {
-      document.getElementById("mt5_terminal_path").value = defaults.mt5_terminal_path || data.mt5_terminal_default || "";
-    }
-    if (!document.getElementById("mt5_login").value.trim() && Number.isFinite(Number(defaults.mt5_login))) {
-      document.getElementById("mt5_login").value = String(defaults.mt5_login);
-    }
-    if (!document.getElementById("mt5_server").value.trim() && defaults.mt5_server) {
-      document.getElementById("mt5_server").value = defaults.mt5_server;
-    }
   } catch {
     if (typeof window.applyGlobalHeaderStatus === "function") {
       window.applyGlobalHeaderStatus(null);
@@ -409,17 +400,22 @@ async function stopOperador() {
 }
 
 function initStreams() {
-  appendLine(lectorLog, lectorLines, "[UI] conectando stream de logs del Lector...");
-  const lectorSource = new EventSource("/api/logs/lector");
-  lectorSource.onmessage = (event) => appendLine(lectorLog, lectorLines, event.data);
-  lectorSource.onopen = () => appendLine(lectorLog, lectorLines, "[UI] stream de logs del Lector conectado");
-  lectorSource.onerror = () => appendLine(lectorLog, lectorLines, "[UI] stream de logs del Lector reconectando...");
+  if (logStreamsStarted) {
+    return;
+  }
+  logStreamsStarted = true;
 
-  appendLine(operadorLog, operadorLines, "[UI] conectando stream de logs del Operador...");
-  const operadorSource = new EventSource("/api/logs/operador");
+  appendLine(lectorLog, lectorLines, "[UI] conectando logs del Lector...");
+  const lectorSource = new EventSource("/api/logs/lector", { withCredentials: true });
+  lectorSource.onmessage = (event) => appendLine(lectorLog, lectorLines, event.data);
+  lectorSource.onopen = () => appendLine(lectorLog, lectorLines, "[UI] logs del Lector conectados");
+  lectorSource.onerror = () => appendLine(lectorLog, lectorLines, "[UI] logs del Lector sin conexión; reintentando...");
+
+  appendLine(operadorLog, operadorLines, "[UI] conectando logs del Operador...");
+  const operadorSource = new EventSource("/api/logs/operador", { withCredentials: true });
   operadorSource.onmessage = (event) => appendLine(operadorLog, operadorLines, event.data);
-  operadorSource.onopen = () => appendLine(operadorLog, operadorLines, "[UI] stream de logs del Operador conectado");
-  operadorSource.onerror = () => appendLine(operadorLog, operadorLines, "[UI] stream de logs del Operador reconectando...");
+  operadorSource.onopen = () => appendLine(operadorLog, operadorLines, "[UI] logs del Operador conectados");
+  operadorSource.onerror = () => appendLine(operadorLog, operadorLines, "[UI] logs del Operador sin conexión; reintentando...");
 }
 
 function initActions() {
@@ -476,7 +472,22 @@ function initActions() {
 }
 
 function initDefaults() {
-  document.getElementById("openai_model").value = "gpt-4o-mini";
+  for (const id of [
+    "telegram_api_id",
+    "telegram_api_hash",
+    "openai_api_key",
+    "openai_model",
+    "openai_base_url",
+    "mt5_terminal_path",
+    "mt5_login",
+    "mt5_password",
+    "mt5_server",
+  ]) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.value = "";
+    }
+  }
   restartCountdown.value = "-";
   restartNextAt.value = "-";
 }
@@ -492,11 +503,18 @@ function startCountdownTicker() {
   }, 1000);
 }
 
-initDefaults();
-initStreams();
-initActions();
-refreshStatus();
-refreshControlErrors();
-startCountdownTicker();
-setInterval(refreshStatus, 1000);
-setInterval(refreshControlErrors, 5000);
+async function bootControlPage() {
+  initDefaults();
+  initActions();
+  if (window.webAuthReadyPromise && typeof window.webAuthReadyPromise.then === "function") {
+    await window.webAuthReadyPromise;
+  }
+  initStreams();
+  refreshStatus();
+  refreshControlErrors();
+  startCountdownTicker();
+  setInterval(refreshStatus, 1000);
+  setInterval(refreshControlErrors, 5000);
+}
+
+bootControlPage();

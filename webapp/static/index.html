@@ -44,26 +44,26 @@
             </div>
             <span class="status" id="status-lector">offline</span>
           </header>
-          <form id="lector-form" class="form-grid">
+          <form id="lector-form" class="form-grid" autocomplete="off">
             <label>
               Telegram API ID
-              <input id="telegram_api_id" type="number" inputmode="numeric" placeholder="123456" required />
+              <input id="telegram_api_id" type="number" inputmode="numeric" placeholder="123456" autocomplete="off" required />
             </label>
             <label>
               Telegram API Hash
-              <input id="telegram_api_hash" type="password" placeholder="hash" required />
+              <input id="telegram_api_hash" type="password" placeholder="hash" autocomplete="new-password" required />
             </label>
             <label>
               OpenAI API Key
-              <input id="openai_api_key" type="password" placeholder="sk-..." required />
+              <input id="openai_api_key" type="password" placeholder="sk-..." autocomplete="new-password" required />
             </label>
             <label>
               OpenAI Model
-              <input id="openai_model" type="text" placeholder="gpt-4o-mini" required />
+              <input id="openai_model" type="text" placeholder="gpt-4o-mini" autocomplete="off" required />
             </label>
             <label>
               OpenAI Base URL (opcional)
-              <input id="openai_base_url" type="text" placeholder="https://api.openai.com/v1" />
+              <input id="openai_base_url" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" />
             </label>
           </form>
           <div class="actions">
@@ -81,22 +81,22 @@
             </div>
             <span class="status" id="status-operador">offline</span>
           </header>
-          <form id="operador-form" class="form-grid">
+          <form id="operador-form" class="form-grid" autocomplete="off">
             <label>
               MT5 Terminal Path
-              <input id="mt5_terminal_path" type="text" placeholder="C:\Program Files\MetaTrader 5\terminal64.exe" required />
+              <input id="mt5_terminal_path" type="text" placeholder="C:\Program Files\MetaTrader 5\terminal64.exe" autocomplete="off" required />
             </label>
             <label>
               MT5 Login
-              <input id="mt5_login" type="number" inputmode="numeric" placeholder="123456" required />
+              <input id="mt5_login" type="number" inputmode="numeric" placeholder="123456" autocomplete="off" required />
             </label>
             <label>
               MT5 Password
-              <input id="mt5_password" type="password" placeholder="password" required />
+              <input id="mt5_password" type="password" placeholder="password" autocomplete="new-password" required />
             </label>
             <label>
               MT5 Server
-              <input id="mt5_server" type="text" placeholder="Broker-Server" required />
+              <input id="mt5_server" type="text" placeholder="Broker-Server" autocomplete="off" required />
             </label>
           </form>
           <div class="actions">

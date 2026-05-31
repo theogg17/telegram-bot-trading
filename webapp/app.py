@@ -230,6 +230,7 @@ class ProcessManager:
             self.last_exit = rc
             self.desired_running = False
             raise RuntimeError(f"{self.name} exited immediately with code={rc}. Revisa el log de {self.name}.")
+        self.log.publish(f"[{self.name}] running after startup check")
 
     def _reader(self) -> None:
         if not self.proc or not self.proc.stdout:
