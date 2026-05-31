@@ -183,6 +183,12 @@ async function refreshStatus() {
     const data = await readJson(res);
     setStatus(statusLector, !!data.lector?.running);
     setStatus(statusOperador, !!data.operador?.running);
+    if (!data.lector?.running && data.lector?.last_exit != null && data.lector.last_exit !== 0) {
+      lectorMsg.textContent = `Lector offline (exit=${data.lector.last_exit}). Ver logs.`;
+    }
+    if (!data.operador?.running && data.operador?.last_exit != null && data.operador.last_exit !== 0) {
+      operadorMsg.textContent = `Operador offline (exit=${data.operador.last_exit}). Ver logs.`;
+    }
     if (typeof window.applyGlobalHeaderStatus === "function") {
       window.applyGlobalHeaderStatus(data);
     } else {
@@ -346,8 +352,16 @@ async function startLector() {
     body: JSON.stringify(payload),
   });
   const data = await readJson(res);
-  lectorMsg.textContent = res.ok ? "Lector iniciado" : data.detail || "Fallo al iniciar";
-  refreshStatus();
+  await refreshStatus();
+  const statusRes = await fetch("/api/status");
+  const statusData = await readJson(statusRes);
+  if (!res.ok) {
+    lectorMsg.textContent = data.detail || "Fallo al iniciar";
+    return;
+  }
+  lectorMsg.textContent = statusData.lector?.running
+    ? "Lector online"
+    : `Lector se cerró${statusData.lector?.last_exit != null ? ` (exit=${statusData.lector.last_exit})` : ""}. Ver logs.`;
 }
 
 async function stopLector() {
@@ -375,8 +389,16 @@ async function startOperador() {
     body: JSON.stringify(payload),
   });
   const data = await readJson(res);
-  operadorMsg.textContent = res.ok ? "Operador iniciado" : data.detail || "Fallo al iniciar";
-  refreshStatus();
+  await refreshStatus();
+  const statusRes = await fetch("/api/status");
+  const statusData = await readJson(statusRes);
+  if (!res.ok) {
+    operadorMsg.textContent = data.detail || "Fallo al iniciar";
+    return;
+  }
+  operadorMsg.textContent = statusData.operador?.running
+    ? "Operador online"
+    : `Operador se cerró${statusData.operador?.last_exit != null ? ` (exit=${statusData.operador.last_exit})` : ""}. Ver logs.`;
 }
 
 async function stopOperador() {
@@ -387,11 +409,17 @@ async function stopOperador() {
 }
 
 function initStreams() {
+  appendLine(lectorLog, lectorLines, "[UI] conectando stream de logs del Lector...");
   const lectorSource = new EventSource("/api/logs/lector");
   lectorSource.onmessage = (event) => appendLine(lectorLog, lectorLines, event.data);
+  lectorSource.onopen = () => appendLine(lectorLog, lectorLines, "[UI] stream de logs del Lector conectado");
+  lectorSource.onerror = () => appendLine(lectorLog, lectorLines, "[UI] stream de logs del Lector reconectando...");
 
+  appendLine(operadorLog, operadorLines, "[UI] conectando stream de logs del Operador...");
   const operadorSource = new EventSource("/api/logs/operador");
   operadorSource.onmessage = (event) => appendLine(operadorLog, operadorLines, event.data);
+  operadorSource.onopen = () => appendLine(operadorLog, operadorLines, "[UI] stream de logs del Operador conectado");
+  operadorSource.onerror = () => appendLine(operadorLog, operadorLines, "[UI] stream de logs del Operador reconectando...");
 }
 
 function initActions() {

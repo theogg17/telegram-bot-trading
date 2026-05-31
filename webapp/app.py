@@ -46,6 +46,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 PYTHON_EXE = sys.executable
 CONFIG_DIR = ROOT_DIR / "config"
 DB_PATH = Path(os.getenv("TRADING_BOT_DB_PATH", str(CONFIG_DIR / "trading_bot.db"))).resolve()
+LECTOR_SESSION_PATH = ROOT_DIR / "Lector" / "session_name.session"
 NON_SIGNALS_CSV_PATH = ROOT_DIR / "Lector" / "data" / "non_signals.csv"
 MT5_TERMINAL_DEFAULT = os.getenv("MT5_TERMINAL_PATH_DEFAULT", r"C:\Program Files\MetaTrader 5\terminal64.exe")
 WEB_AUTH_FILE = CONFIG_DIR / "web_auth.json"
@@ -199,21 +200,36 @@ class ProcessManager:
     def start(self, env: dict) -> None:
         if self.running():
             raise RuntimeError(f"{self.name} already running")
-        self.last_env = dict(env)
+        proc_env = dict(env)
+        proc_env["PYTHONUNBUFFERED"] = "1"
+        proc_env.setdefault("PYTHONUTF8", "1")
+        proc_env.setdefault("PYTHONIOENCODING", "utf-8")
+        self.last_env = dict(proc_env)
         self.desired_running = True
         self.log.publish(f"[{self.name}] starting...")
+        self.log.publish(f"[{self.name}] cwd={self.cwd}")
+        self.log.publish(f"[{self.name}] cmd={' '.join(self.cmd)}")
         self.proc = subprocess.Popen(
             self.cmd,
             cwd=self.cwd,
-            env=env,
+            env=proc_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
         self.log.publish(f"[{self.name}] started pid={self.proc.pid}")
+
+        time.sleep(1.0)
+        rc = self.proc.poll()
+        if rc is not None:
+            self.last_exit = rc
+            self.desired_running = False
+            raise RuntimeError(f"{self.name} exited immediately with code={rc}. Revisa el log de {self.name}.")
 
     def _reader(self) -> None:
         if not self.proc or not self.proc.stdout:
@@ -222,6 +238,8 @@ class ProcessManager:
             self.log.publish(line)
         rc = self.proc.poll()
         self.last_exit = rc
+        if rc is not None and rc != 0:
+            self.desired_running = False
         self.log.publish(f"[{self.name}] exited code={rc}")
         try:
             self.proc.stdout.close()
@@ -4610,11 +4628,13 @@ def status():
                 "running": lector_manager.running(),
                 "pid": lector_manager.proc.pid if lector_manager.proc else None,
                 "last_exit": lector_manager.last_exit,
+                "desired_running": lector_manager.desired_running,
             },
             "operador": {
                 "running": operador_manager.running(),
                 "pid": operador_manager.proc.pid if operador_manager.proc else None,
                 "last_exit": operador_manager.last_exit,
+                "desired_running": operador_manager.desired_running,
             },
         }
     )
@@ -5657,6 +5677,18 @@ def reportes_errors_pdf_legacy(from_ts: str = "", to_ts: str = ""):
 def start_lector(payload: LectorStartRequest):
     if _active_channels_count() <= 0:
         raise HTTPException(status_code=400, detail="No hay canales activos en SQLite. Carga al menos uno.")
+    if not LECTOR_SESSION_PATH.exists():
+        lector_manager.log.publish(
+            "[LECTOR] ERROR: falta Lector/session_name.session. "
+            "Primero hay que autenticar Telegram una vez desde consola."
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Falta la sesión de Telegram del Lector. Ejecuta una vez por consola: "
+                "python Lector\\main.py, completa teléfono/código de Telegram y luego vuelve a iniciar desde Control."
+            ),
+        )
 
     api_hash = payload.telegram_api_hash.strip()
     openai_key = payload.openai_api_key.strip()
@@ -5672,6 +5704,8 @@ def start_lector(payload: LectorStartRequest):
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     env["TELEGRAM_API_ID"] = str(payload.telegram_api_id)
     env["TELEGRAM_API_HASH"] = api_hash
     env["OPENAI_API_KEY"] = openai_key
@@ -5727,6 +5761,8 @@ def start_operador(payload: OperadorStartRequest):
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     env["MT5_TERMINAL_PATH"] = terminal_path
     env["MT5_LOGIN"] = str(mt5_login)
     env["MT5_PASSWORD"] = mt5_password

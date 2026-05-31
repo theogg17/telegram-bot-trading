@@ -8,6 +8,7 @@ queue/
 Lector/data/
 Operador/*.csv
 config/trading_bot.db
+config/trading_bot.db-*
 config/web_auth.json
 config/runtime_env.key
 *.session
