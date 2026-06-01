@@ -176,6 +176,11 @@ async def handler(event):
 
 def run():
     print("📡 Listening to Telegram channels:", list(CHANNELS.keys()))
+    try:
+        asyncio.get_event_loop_policy().get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
     client.start()
     client.run_until_disconnected()
 
