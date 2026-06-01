@@ -46,6 +46,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 PYTHON_EXE = sys.executable
 CONFIG_DIR = ROOT_DIR / "config"
 DB_PATH = Path(os.getenv("TRADING_BOT_DB_PATH", str(CONFIG_DIR / "trading_bot.db"))).resolve()
+LECTOR_DIR = ROOT_DIR / "Lector"
 LECTOR_SESSION_PATH = ROOT_DIR / "Lector" / "session_name.session"
 NON_SIGNALS_CSV_PATH = ROOT_DIR / "Lector" / "data" / "non_signals.csv"
 MT5_TERMINAL_DEFAULT = os.getenv("MT5_TERMINAL_PATH_DEFAULT", r"C:\Program Files\MetaTrader 5\terminal64.exe")
@@ -278,6 +279,9 @@ OPERADOR_CMD = [PYTHON_EXE, "-u", str(ROOT_DIR / "Operador" / "daemon.py")]
 
 lector_manager = ProcessManager("LECTOR", LECTOR_CMD, ROOT_DIR)
 operador_manager = ProcessManager("OPERADOR", OPERADOR_CMD, ROOT_DIR)
+telegram_auth_lock = threading.Lock()
+telegram_auth_requests: dict[str, dict[str, str | int | float]] = {}
+TELEGRAM_AUTH_TTL_SEC = 600
 
 
 class LectorStartRequest(BaseModel):
@@ -286,6 +290,22 @@ class LectorStartRequest(BaseModel):
     openai_api_key: str
     openai_model: str
     openai_base_url: Optional[str] = ""
+
+
+class TelegramAuthSendCodeRequest(BaseModel):
+    telegram_api_id: int
+    telegram_api_hash: str
+    phone: str
+
+
+class TelegramAuthConfirmCodeRequest(BaseModel):
+    auth_id: str
+    code: str
+
+
+class TelegramAuthConfirmPasswordRequest(BaseModel):
+    auth_id: str
+    password: str
 
 
 class OperadorStartRequest(BaseModel):
@@ -634,6 +654,78 @@ def _setting_get_int(values: dict[str, str], key: str, default: int) -> int:
 
 def _setting_get_float(values: dict[str, str], key: str, default: float) -> float:
     return _float_from_str(values.get(key), default=default)
+
+
+def _telegram_auth_module():
+    lector_path = str(LECTOR_DIR)
+    if lector_path not in sys.path:
+        sys.path.insert(0, lector_path)
+    import telegram_auth  # type: ignore
+
+    return telegram_auth
+
+
+def _telegram_auth_error_response(exc: Exception):
+    code = getattr(exc, "code", "telegram_auth_error")
+    message = getattr(exc, "message", str(exc))
+    status_code = 400
+    if str(code) in {"invalid_code", "expired_code", "missing_phone_code_hash"}:
+        status_code = 409
+    return HTTPException(status_code=status_code, detail={"code": str(code), "message": str(message)})
+
+
+def _telegram_auth_prune(now_ts: float | None = None) -> None:
+    now = float(now_ts if now_ts is not None else time.time())
+    expired = []
+    for auth_id, data in telegram_auth_requests.items():
+        if float(data.get("expires_at") or 0.0) <= now:
+            expired.append(auth_id)
+    for auth_id in expired:
+        telegram_auth_requests.pop(auth_id, None)
+
+
+def _telegram_auth_store(api_id: int, api_hash: str, phone: str, phone_code_hash: str) -> str:
+    auth_id = uuid.uuid4().hex
+    now = time.time()
+    with telegram_auth_lock:
+        _telegram_auth_prune(now_ts=now)
+        telegram_auth_requests[auth_id] = {
+            "telegram_api_id": int(api_id),
+            "telegram_api_hash": str(api_hash),
+            "phone": str(phone),
+            "phone_code_hash": str(phone_code_hash),
+            "expires_at": now + TELEGRAM_AUTH_TTL_SEC,
+        }
+    return auth_id
+
+
+def _telegram_auth_get(auth_id: str) -> dict[str, str | int | float]:
+    clean = str(auth_id or "").strip()
+    if not clean:
+        raise HTTPException(status_code=400, detail={"code": "missing_auth_id", "message": "Falta auth_id."})
+    with telegram_auth_lock:
+        _telegram_auth_prune()
+        data = telegram_auth_requests.get(clean)
+        if not data:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "auth_expired", "message": "El codigo expiro o se reinicio la web. Envia un codigo nuevo."},
+            )
+        return dict(data)
+
+
+def _telegram_auth_clear(auth_id: str) -> None:
+    clean = str(auth_id or "").strip()
+    if not clean:
+        return
+    with telegram_auth_lock:
+        telegram_auth_requests.pop(clean, None)
+
+
+def _telegram_auth_pending_exists() -> bool:
+    with telegram_auth_lock:
+        _telegram_auth_prune()
+        return bool(telegram_auth_requests)
 
 
 def _ensure_app_settings_table() -> None:
@@ -4641,6 +4733,102 @@ def status():
     )
 
 
+@app.get("/api/telegram-auth/status")
+def telegram_auth_status(telegram_api_id: Optional[int] = None, telegram_api_hash: str = ""):
+    auth = _telegram_auth_module()
+    try:
+        payload = auth.check_session(telegram_api_id, telegram_api_hash) if telegram_api_id and telegram_api_hash else auth.check_session()
+    except Exception as exc:
+        raise _telegram_auth_error_response(exc) from exc
+    payload["pending_auth"] = _telegram_auth_pending_exists()
+    return JSONResponse(payload)
+
+
+@app.post("/api/telegram-auth/send-code")
+def telegram_auth_send_code(payload: TelegramAuthSendCodeRequest):
+    api_hash = str(payload.telegram_api_hash or "").strip()
+    phone = str(payload.phone or "").strip()
+    if int(payload.telegram_api_id) <= 0:
+        raise HTTPException(status_code=400, detail={"code": "invalid_api_id", "message": "Telegram API ID debe ser positivo."})
+    if not api_hash:
+        raise HTTPException(status_code=400, detail={"code": "missing_api_hash", "message": "Telegram API Hash es obligatorio."})
+    if not phone:
+        raise HTTPException(status_code=400, detail={"code": "missing_phone", "message": "Telefono es obligatorio."})
+    auth = _telegram_auth_module()
+    try:
+        result = auth.send_code(int(payload.telegram_api_id), api_hash, phone)
+    except Exception as exc:
+        raise _telegram_auth_error_response(exc) from exc
+    if str(result.get("status")) == "already_authorized":
+        return JSONResponse({"status": "authorized", "session_exists": True, "user": result.get("user", "")})
+    phone_code_hash = str(result.get("phone_code_hash") or "")
+    if not phone_code_hash:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "telegram_code_hash_missing", "message": "Telegram no devolvio token de codigo. Intenta de nuevo."},
+        )
+    auth_id = _telegram_auth_store(int(payload.telegram_api_id), api_hash, phone, phone_code_hash)
+    return JSONResponse(
+        {
+            "status": "code_sent",
+            "auth_id": auth_id,
+            "expires_in_sec": TELEGRAM_AUTH_TTL_SEC,
+            "session_exists": bool(result.get("session_exists")),
+        }
+    )
+
+
+@app.post("/api/telegram-auth/confirm-code")
+def telegram_auth_confirm_code(payload: TelegramAuthConfirmCodeRequest):
+    data = _telegram_auth_get(payload.auth_id)
+    auth = _telegram_auth_module()
+    try:
+        result = auth.confirm_code(
+            int(data["telegram_api_id"]),
+            str(data["telegram_api_hash"]),
+            str(data["phone"]),
+            str(payload.code or "").strip(),
+            str(data["phone_code_hash"]),
+        )
+    except Exception as exc:
+        raise _telegram_auth_error_response(exc) from exc
+    if bool(result.get("needs_password")):
+        return JSONResponse({"status": "password_required", "needs_password": True, "auth_id": str(payload.auth_id)})
+    _telegram_auth_clear(payload.auth_id)
+    return JSONResponse({"status": "authorized", "session_exists": True, "user": result.get("user", "")})
+
+
+@app.post("/api/telegram-auth/confirm-password")
+def telegram_auth_confirm_password(payload: TelegramAuthConfirmPasswordRequest):
+    data = _telegram_auth_get(payload.auth_id)
+    auth = _telegram_auth_module()
+    try:
+        result = auth.confirm_password(
+            int(data["telegram_api_id"]),
+            str(data["telegram_api_hash"]),
+            str(payload.password or ""),
+        )
+    except Exception as exc:
+        raise _telegram_auth_error_response(exc) from exc
+    _telegram_auth_clear(payload.auth_id)
+    return JSONResponse({"status": "authorized", "session_exists": True, "user": result.get("user", "")})
+
+
+@app.delete("/api/telegram-auth/session")
+def telegram_auth_delete_session():
+    if lector_manager.running():
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "lector_running", "message": "Deten el Lector antes de desvincular Telegram."},
+        )
+    auth = _telegram_auth_module()
+    auth.delete_session()
+    with telegram_auth_lock:
+        telegram_auth_requests.clear()
+    lector_manager.log.publish("[LECTOR] Sesion Telegram desvinculada desde Control.")
+    return JSONResponse({"status": "deleted", "session_exists": False})
+
+
 @app.get("/api/web-auth/me")
 def web_auth_me(request: Request):
     user = _get_web_session_user(request)
@@ -5681,13 +5869,13 @@ def start_lector(payload: LectorStartRequest):
     if not LECTOR_SESSION_PATH.exists():
         lector_manager.log.publish(
             "[LECTOR] ERROR: falta Lector/session_name.session. "
-            "Primero hay que autenticar Telegram una vez desde consola."
+            "Vincula Telegram desde la seccion Telegram del panel Control."
         )
         raise HTTPException(
             status_code=409,
             detail=(
-                "Falta la sesión de Telegram del Lector. Ejecuta una vez por consola: "
-                "python Lector\\main.py, completa teléfono/código de Telegram y luego vuelve a iniciar desde Control."
+                "Falta la sesion de Telegram del Lector. Vincula Telegram desde Control: "
+                "ingresa API ID, API Hash y telefono, envia el codigo y confirmalo."
             ),
         )
 

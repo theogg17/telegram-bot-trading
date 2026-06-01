@@ -230,6 +230,10 @@ body {
   font-size: 0.84rem;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .subsection-title {
   margin: 14px 0 10px;
   font-size: 0.96rem;
@@ -375,6 +379,30 @@ tr:last-child td {
   display: grid;
   gap: 11px;
   margin-bottom: 12px;
+}
+
+.telegram-auth-box {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(8, 12, 19, 0.26);
+}
+
+.telegram-auth-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.compact-actions {
+  gap: 8px;
+  margin-top: 0;
 }
 
 .channels-grid {

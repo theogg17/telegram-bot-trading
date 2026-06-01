@@ -16,11 +16,18 @@ const restartNextAt = document.getElementById("restart-next-at");
 const restartCountdown = document.getElementById("restart-countdown");
 const controlErrorsMsg = document.getElementById("control-errors-msg");
 const controlErrorsBody = document.getElementById("control-errors-body");
+const telegramAuthStatus = document.getElementById("telegram-auth-status");
+const telegramAuthMsg = document.getElementById("telegram-auth-msg");
+const telegramCodeWrap = document.getElementById("telegram-code-wrap");
+const telegramCodeActions = document.getElementById("telegram-code-actions");
+const telegramPasswordWrap = document.getElementById("telegram-password-wrap");
+const telegramPasswordActions = document.getElementById("telegram-password-actions");
 
 const lectorLines = [];
 const operadorLines = [];
 let restartRemaining = null;
 let logStreamsStarted = false;
+let telegramAuthId = "";
 
 function showSavedToast(message) {
   if (typeof window.showSavedToast === "function") {
@@ -79,6 +86,34 @@ async function readJson(res) {
   } catch {
     return {};
   }
+}
+
+function apiErrorMessage(data, fallback = "Error") {
+  const detail = data?.detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (detail && typeof detail.message === "string") {
+    return detail.message;
+  }
+  if (typeof data?.message === "string") {
+    return data.message;
+  }
+  return fallback;
+}
+
+function setTelegramAuthStep(step) {
+  telegramCodeWrap?.classList.toggle("hidden", step !== "code" && step !== "password");
+  telegramCodeActions?.classList.toggle("hidden", step !== "code");
+  telegramPasswordWrap?.classList.toggle("hidden", step !== "password");
+  telegramPasswordActions?.classList.toggle("hidden", step !== "password");
+}
+
+function telegramAuthPayloadBase() {
+  return {
+    telegram_api_id: Number(document.getElementById("telegram_api_id").value),
+    telegram_api_hash: document.getElementById("telegram_api_hash").value.trim(),
+  };
 }
 
 function setChannelForm(channel = null) {
@@ -320,6 +355,154 @@ async function refreshControlErrors() {
   }
 }
 
+async function refreshTelegramAuthStatus() {
+  if (!telegramAuthStatus || !telegramAuthMsg) {
+    return;
+  }
+  try {
+    const base = telegramAuthPayloadBase();
+    const params = new URLSearchParams();
+    if (Number.isFinite(base.telegram_api_id) && base.telegram_api_id > 0 && base.telegram_api_hash) {
+      params.set("telegram_api_id", String(base.telegram_api_id));
+      params.set("telegram_api_hash", base.telegram_api_hash);
+    }
+    const res = await fetch(`/api/telegram-auth/status${params.toString() ? `?${params}` : ""}`);
+    const data = await readJson(res);
+    if (!res.ok) {
+      telegramAuthStatus.textContent = "Error";
+      telegramAuthMsg.textContent = apiErrorMessage(data, "No se pudo verificar Telegram");
+      return;
+    }
+    if (!data.session_exists) {
+      telegramAuthStatus.textContent = "No vinculada";
+      telegramAuthMsg.textContent = "Envia un codigo para vincular Telegram.";
+      return;
+    }
+    if (data.pending_auth || telegramAuthId) {
+      telegramAuthStatus.textContent = "Codigo pendiente";
+      telegramAuthMsg.textContent = "Ingresa el codigo recibido y presiona Confirmar codigo.";
+      setTelegramAuthStep("code");
+      return;
+    }
+    if (data.authorized === false) {
+      telegramAuthStatus.textContent = "Sesion invalida";
+      telegramAuthMsg.textContent = "La sesion existe, pero no esta autorizada. Desvincula y vuelve a vincular.";
+      return;
+    }
+    telegramAuthStatus.textContent = data.authorized === true ? "Vinculada" : "Sesion creada";
+    telegramAuthMsg.textContent = data.user ? `Telegram vinculado: ${data.user}` : "Telegram vinculado.";
+  } catch {
+    telegramAuthStatus.textContent = "Error";
+    telegramAuthMsg.textContent = "No se pudo verificar Telegram";
+  }
+}
+
+async function sendTelegramCode() {
+  const base = telegramAuthPayloadBase();
+  const phone = document.getElementById("telegram_phone").value.trim();
+  if (!Number.isFinite(base.telegram_api_id) || base.telegram_api_id <= 0) {
+    telegramAuthMsg.textContent = "Telegram API ID invalido";
+    return;
+  }
+  if (!base.telegram_api_hash || !phone) {
+    telegramAuthMsg.textContent = "Completa API Hash y telefono";
+    return;
+  }
+  telegramAuthMsg.textContent = "Enviando codigo...";
+  const res = await fetch("/api/telegram-auth/send-code", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...base, phone }),
+  });
+  const data = await readJson(res);
+  if (!res.ok) {
+    telegramAuthMsg.textContent = apiErrorMessage(data, "No se pudo enviar codigo");
+    return;
+  }
+  if (data.status === "authorized") {
+    telegramAuthId = "";
+    setTelegramAuthStep("done");
+    telegramAuthStatus.textContent = "Vinculada";
+    telegramAuthMsg.textContent = data.user ? `Telegram ya estaba vinculado: ${data.user}` : "Telegram ya estaba vinculado.";
+    return;
+  }
+  telegramAuthId = data.auth_id || "";
+  document.getElementById("telegram_code").value = "";
+  document.getElementById("telegram_password").value = "";
+  setTelegramAuthStep("code");
+  telegramAuthStatus.textContent = "Codigo enviado";
+  telegramAuthMsg.textContent = "Ingresa el codigo que recibiste en Telegram.";
+}
+
+async function confirmTelegramCode() {
+  const code = document.getElementById("telegram_code").value.trim();
+  if (!telegramAuthId || !code) {
+    telegramAuthMsg.textContent = "Ingresa el codigo recibido";
+    return;
+  }
+  telegramAuthMsg.textContent = "Confirmando codigo...";
+  const res = await fetch("/api/telegram-auth/confirm-code", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auth_id: telegramAuthId, code }),
+  });
+  const data = await readJson(res);
+  if (!res.ok) {
+    telegramAuthMsg.textContent = apiErrorMessage(data, "No se pudo confirmar codigo");
+    return;
+  }
+  if (data.needs_password) {
+    setTelegramAuthStep("password");
+    telegramAuthStatus.textContent = "Requiere 2FA";
+    telegramAuthMsg.textContent = "Ingresa el password 2FA de Telegram.";
+    return;
+  }
+  telegramAuthId = "";
+  setTelegramAuthStep("done");
+  telegramAuthStatus.textContent = "Vinculada";
+  telegramAuthMsg.textContent = data.user ? `Telegram vinculado: ${data.user}` : "Telegram vinculado.";
+}
+
+async function confirmTelegramPassword() {
+  const password = document.getElementById("telegram_password").value;
+  if (!telegramAuthId || !password) {
+    telegramAuthMsg.textContent = "Ingresa el password 2FA";
+    return;
+  }
+  telegramAuthMsg.textContent = "Confirmando 2FA...";
+  const res = await fetch("/api/telegram-auth/confirm-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auth_id: telegramAuthId, password }),
+  });
+  const data = await readJson(res);
+  if (!res.ok) {
+    telegramAuthMsg.textContent = apiErrorMessage(data, "No se pudo confirmar 2FA");
+    return;
+  }
+  telegramAuthId = "";
+  setTelegramAuthStep("done");
+  telegramAuthStatus.textContent = "Vinculada";
+  telegramAuthMsg.textContent = data.user ? `Telegram vinculado: ${data.user}` : "Telegram vinculado.";
+}
+
+async function unlinkTelegramSession() {
+  if (!window.confirm("Desvincular la sesion Telegram local? Deten el Lector antes de hacerlo.")) {
+    return;
+  }
+  telegramAuthMsg.textContent = "Desvinculando Telegram...";
+  const res = await fetch("/api/telegram-auth/session", { method: "DELETE" });
+  const data = await readJson(res);
+  if (!res.ok) {
+    telegramAuthMsg.textContent = apiErrorMessage(data, "No se pudo desvincular Telegram");
+    return;
+  }
+  telegramAuthId = "";
+  setTelegramAuthStep("done");
+  telegramAuthStatus.textContent = "No vinculada";
+  telegramAuthMsg.textContent = "Sesion Telegram desvinculada.";
+}
+
 async function startLector() {
   const payload = {
     telegram_api_id: Number(document.getElementById("telegram_api_id").value),
@@ -423,6 +606,11 @@ function initActions() {
   document.getElementById("stop-lector").addEventListener("click", stopLector);
   document.getElementById("start-operador").addEventListener("click", startOperador);
   document.getElementById("stop-operador").addEventListener("click", stopOperador);
+  document.getElementById("telegram-send-code")?.addEventListener("click", sendTelegramCode);
+  document.getElementById("telegram-confirm-code")?.addEventListener("click", confirmTelegramCode);
+  document.getElementById("telegram-confirm-password")?.addEventListener("click", confirmTelegramPassword);
+  document.getElementById("telegram-refresh-status")?.addEventListener("click", refreshTelegramAuthStatus);
+  document.getElementById("telegram-unlink")?.addEventListener("click", unlinkTelegramSession);
 
   const saveChannelBtn = document.getElementById("save-channel");
   const clearChannelBtn = document.getElementById("clear-channel");
@@ -475,6 +663,9 @@ function initDefaults() {
   for (const id of [
     "telegram_api_id",
     "telegram_api_hash",
+    "telegram_phone",
+    "telegram_code",
+    "telegram_password",
     "openai_api_key",
     "openai_model",
     "openai_base_url",
@@ -488,6 +679,7 @@ function initDefaults() {
       el.value = "";
     }
   }
+  setTelegramAuthStep("done");
   restartCountdown.value = "-";
   restartNextAt.value = "-";
 }
@@ -510,6 +702,7 @@ async function bootControlPage() {
     await window.webAuthReadyPromise;
   }
   initStreams();
+  refreshTelegramAuthStatus();
   refreshStatus();
   refreshControlErrors();
   startCountdownTicker();

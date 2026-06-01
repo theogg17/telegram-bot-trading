@@ -53,6 +53,38 @@
               Telegram API Hash
               <input id="telegram_api_hash" type="password" placeholder="hash" autocomplete="new-password" required />
             </label>
+            <div class="telegram-auth-box">
+              <div class="telegram-auth-header">
+                <span>Sesion Telegram</span>
+                <span class="hint-inline" id="telegram-auth-status">Sin verificar</span>
+              </div>
+              <label>
+                Telefono Telegram
+                <input id="telegram_phone" type="tel" placeholder="+598..." autocomplete="off" />
+              </label>
+              <div class="actions compact-actions">
+                <button class="btn ghost" id="telegram-send-code" type="button">Enviar codigo</button>
+                <span class="hint-inline" id="telegram-auth-msg">Vincula Telegram para iniciar el Lector.</span>
+              </div>
+              <label class="hidden" id="telegram-code-wrap">
+                Codigo recibido
+                <input id="telegram_code" type="text" inputmode="numeric" placeholder="12345" autocomplete="one-time-code" />
+              </label>
+              <div class="actions compact-actions hidden" id="telegram-code-actions">
+                <button class="btn ghost" id="telegram-confirm-code" type="button">Confirmar codigo</button>
+              </div>
+              <label class="hidden" id="telegram-password-wrap">
+                Password 2FA Telegram
+                <input id="telegram_password" type="password" placeholder="password 2FA" autocomplete="new-password" />
+              </label>
+              <div class="actions compact-actions hidden" id="telegram-password-actions">
+                <button class="btn ghost" id="telegram-confirm-password" type="button">Confirmar 2FA</button>
+              </div>
+              <div class="actions compact-actions">
+                <button class="btn ghost" id="telegram-refresh-status" type="button">Verificar sesion</button>
+                <button class="btn ghost" id="telegram-unlink" type="button">Desvincular</button>
+              </div>
+            </div>
             <label>
               OpenAI API Key
               <input id="openai_api_key" type="password" placeholder="sk-..." autocomplete="new-password" required />
