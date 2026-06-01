@@ -2386,11 +2386,18 @@ RETRYABLE_MT5_RETCODES = {
     int(getattr(mt5, "TRADE_RETCODE_PRICE_CHANGED", -1)),
     int(getattr(mt5, "TRADE_RETCODE_PRICE_OFF", -1)),
     int(getattr(mt5, "TRADE_RETCODE_TOO_MANY_REQUESTS", -1)),
-    int(getattr(mt5, "TRADE_RETCODE_SERVER_DISABLES_AT", -1)),
-    int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", -1)),
     int(getattr(mt5, "TRADE_RETCODE_LOCKED", -1)),
     int(getattr(mt5, "TRADE_RETCODE_FROZEN", -1)),
     int(getattr(mt5, "TRADE_RETCODE_NO_CONNECTION", -1)),
+}
+PERMANENT_MT5_RETCODES = {
+    int(getattr(mt5, "TRADE_RETCODE_SERVER_DISABLES_AT", 10026)),
+    int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027)),
+    int(getattr(mt5, "TRADE_RETCODE_TRADE_DISABLED", 10017)),
+    int(getattr(mt5, "TRADE_RETCODE_MARKET_CLOSED", 10018)),
+    int(getattr(mt5, "TRADE_RETCODE_NO_MONEY", 10019)),
+    int(getattr(mt5, "TRADE_RETCODE_INVALID_STOPS", 10016)),
+    int(getattr(mt5, "TRADE_RETCODE_INVALID_VOLUME", 10014)),
 }
 
 
@@ -2398,6 +2405,8 @@ def _is_retryable_mt5_retcode(retcode) -> bool:
     try:
         code = int(retcode)
     except Exception:
+        return False
+    if code in PERMANENT_MT5_RETCODES:
         return False
     return code in RETRYABLE_MT5_RETCODES
 
@@ -2420,6 +2429,10 @@ def _is_retryable_error_text(text: str) -> bool:
     if "invalid" in low and "price" in low:
         return False
     if "unsupported filling mode" in low:
+        return False
+    if "autotrading disabled" in low or "auto trading disabled" in low:
+        return False
+    if "trade disabled" in low or "client disables" in low or "server disables" in low:
         return False
     code = _extract_retcode_from_text(raw)
     if code is not None:
@@ -3898,6 +3911,7 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
         # ENTRY ------------------------------------------------------
         if ev_type == "entry":
             entry_retry_error = ""
+            entry_permanent_error = ""
             execute_real_entry = True
             if assignments and real_assignment is None:
                 execute_real_entry = False
@@ -3984,6 +3998,8 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
                         rc = getattr(res, "retcode", None) if res is not None else None
                         if _is_retryable_mt5_retcode(rc) or res is None:
                             entry_retry_error = f"entry_send_retryable ret={rc}"
+                        else:
+                            entry_permanent_error = f"entry_send_error ret={rc} comment={getattr(res, 'comment', '') if res else ''}"
                     request_price = _safe_float_or_none(getattr(req_obj, "price", None) if req_obj is not None else None)
                     entry_price_num = request_price
                     if entry_price_num is None:
@@ -4241,9 +4257,14 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
                 source=source,
                 retry_error=entry_retry_error,
                 retry_error_type="entry_retryable",
+                permanent_error=entry_permanent_error,
+                permanent_error_type="entry_send_error",
             )
             if fin == "retry":
                 print(f"🔁 ENTRY retry programado uid={uid} reason={entry_retry_error}")
+                continue
+            if fin == "permanent_fail":
+                print(f"ENTRY fallo permanente {symbol} {side} ({channel}) uid={uid} reason={entry_permanent_error}")
                 continue
             print(f"✅ ENTRY {symbol} {side} ({channel}) uid={uid}")
             continue
