@@ -2401,6 +2401,42 @@ PERMANENT_MT5_RETCODES = {
 }
 
 
+def _mt5_retcode_user_message(retcode, comment="") -> str:
+    try:
+        code = int(retcode)
+    except Exception:
+        code = None
+    raw_comment = str(comment or "").strip()
+    low = raw_comment.lower()
+    client_disabled = int(getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", 10027))
+    server_disabled = int(getattr(mt5, "TRADE_RETCODE_SERVER_DISABLES_AT", 10026))
+    trade_disabled = int(getattr(mt5, "TRADE_RETCODE_TRADE_DISABLED", 10017))
+    market_closed = int(getattr(mt5, "TRADE_RETCODE_MARKET_CLOSED", 10018))
+    no_money = int(getattr(mt5, "TRADE_RETCODE_NO_MONEY", 10019))
+    invalid_stops = int(getattr(mt5, "TRADE_RETCODE_INVALID_STOPS", 10016))
+    invalid_volume = int(getattr(mt5, "TRADE_RETCODE_INVALID_VOLUME", 10014))
+
+    if code == client_disabled or "autotrading disabled" in low or "auto trading disabled" in low:
+        return (
+            "AutoTrading esta deshabilitado en MT5. "
+            "Solucion: abre MetaTrader 5 en Windows y activa el boton 'Algo Trading'/'AutoTrading' "
+            "en la barra superior. Tambien revisa Herramientas > Opciones > Expert Advisors y permite trading algoritimico."
+        )
+    if code == server_disabled:
+        return "El servidor/broker deshabilito AutoTrading para esta cuenta o simbolo. Revisa permisos de la cuenta con el broker."
+    if code == trade_disabled or "trade disabled" in low:
+        return "El trading esta deshabilitado para este simbolo o cuenta. Revisa si el simbolo permite operar y si la cuenta esta habilitada."
+    if code == market_closed:
+        return "El mercado esta cerrado para este simbolo. Reintenta cuando el mercado este abierto."
+    if code == no_money:
+        return "Fondos insuficientes o margen insuficiente para abrir la orden. Baja volumen o revisa margen disponible."
+    if code == invalid_stops:
+        return "SL/TP invalidos para el precio actual. Para BUY el SL debe estar debajo y TP arriba; para SELL al reves."
+    if code == invalid_volume:
+        return "Volumen invalido para el simbolo. Ajusta TOTAL_VOLUME al minimo/step permitido por el broker."
+    return raw_comment or f"MT5 rechazo la orden ret={retcode}"
+
+
 def _is_retryable_mt5_retcode(retcode) -> bool:
     try:
         code = int(retcode)
@@ -2575,6 +2611,8 @@ def _close_request(symbol, volume, side, price, position, comment="", filling=No
     }
 
 def _log_order_error(event_id, action, symbol, side, volume, comment, result, reason):
+    retcode = getattr(result, "retcode", "") if result else ""
+    details = _mt5_retcode_user_message(retcode, getattr(result, "comment", "") if result else "") if result else ""
     log_error({
         "timestamp": _now_iso(),
         "event_id": event_id or "",
@@ -2584,8 +2622,8 @@ def _log_order_error(event_id, action, symbol, side, volume, comment, result, re
         "volume": volume,
         "comment": comment,
         "reason": reason,
-        "retcode": getattr(result, "retcode", "") if result else "",
-        "details": getattr(result, "comment", "") if result else "",
+        "retcode": retcode,
+        "details": details,
     })
 
 def _order_exists_by_comment(symbol: str, comment: str) -> bool:
@@ -3999,7 +4037,8 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
                         if _is_retryable_mt5_retcode(rc) or res is None:
                             entry_retry_error = f"entry_send_retryable ret={rc}"
                         else:
-                            entry_permanent_error = f"entry_send_error ret={rc} comment={getattr(res, 'comment', '') if res else ''}"
+                            user_message = _mt5_retcode_user_message(rc, getattr(res, "comment", "") if res else "")
+                            entry_permanent_error = f"entry_send_error ret={rc}; {user_message}"
                     request_price = _safe_float_or_none(getattr(req_obj, "price", None) if req_obj is not None else None)
                     entry_price_num = request_price
                     if entry_price_num is None:
