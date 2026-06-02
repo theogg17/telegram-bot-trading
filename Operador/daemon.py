@@ -1056,6 +1056,7 @@ def _operation_mark_closed(
     status="CLOSED",
     close_event_id="",
     close_message_id="",
+    close_trigger_message_id="",
     close_reason="",
     close_source="",
     close_error_id="",
@@ -1065,6 +1066,7 @@ def _operation_mark_closed(
     pnl_pips=None,
 ):
     now = _now_iso()
+    trigger_message_id = close_trigger_message_id if close_trigger_message_id not in ("", None) else close_message_id
     row = conn.execute(
         "SELECT opened_at FROM operation_records WHERE id = ?",
         (int(operation_id),),
@@ -1097,7 +1099,7 @@ def _operation_mark_closed(
             str(status or "CLOSED"),
             now,
             str(close_event_id or ""),
-            _normalize_id(close_message_id),
+            _normalize_id(trigger_message_id),
             str(close_reason or ""),
             str(close_source or ""),
             str(close_error_id or ""),
@@ -2483,6 +2485,36 @@ def _is_retryable_error_text(text: str) -> bool:
         "server busy",
     )
     return any(t in low for t in tokens)
+
+
+def _queue_error_user_message(error) -> str:
+    raw = str(error or "").strip()
+    low = raw.lower()
+    if "unexpected keyword argument" in low:
+        m = re.search(r"unexpected keyword argument ['\"]([^'\"]+)['\"]", raw)
+        field = m.group(1) if m else ""
+        if field:
+            return (
+                f"Error interno de compatibilidad: el evento de cola trae el campo '{field}', "
+                "pero una funcion del Operador no lo estaba aceptando. "
+                "Solucion: actualizar el codigo del Operador y reiniciarlo; el evento queda pendiente para reintento."
+            )
+        return (
+            "Error interno de compatibilidad entre el evento de cola y una funcion del Operador. "
+            "Solucion: actualizar el codigo del Operador y reiniciarlo; el evento queda pendiente para reintento."
+        )
+    if "database is locked" in low:
+        return (
+            "La base de datos esta ocupada por otro proceso. "
+            "Solucion: espera unos segundos o cierra procesos duplicados del bot si quedo mas de uno abierto."
+        )
+    if "permission denied" in low or "access is denied" in low:
+        return (
+            "Windows bloqueo el acceso a un archivo que el Operador necesita leer o mover. "
+            "Solucion: revisa permisos, antivirus o si el archivo esta abierto en otro programa."
+        )
+    return raw or "Error desconocido procesando un evento pendiente de la cola."
+
 
 def normalize_volume(symbol: str, vol: float) -> float:
     info = mt5.symbol_info(symbol)
@@ -5027,6 +5059,7 @@ def run_loop(poll_seconds=2):
                             continue
                     except Exception as e:
                         retries = _queue_register_failure(path, event, str(e))
+                        user_error = _queue_error_user_message(e)
                         log_error({
                             "timestamp": _now_iso(),
                             "event_id": _queue_event_id(path, event),
@@ -5037,18 +5070,18 @@ def run_loop(poll_seconds=2):
                             "comment": "",
                             "reason": "queue_event_error",
                             "retcode": "",
-                            "details": f"{e};retries={retries}",
+                            "details": f"{user_error};raw={e};retries={retries}",
                         })
                         if retries >= QUEUE_MAX_RETRIES:
                             _queue_quarantine_file(path)
                             print(
                                 f"⛔ Queue event en cuarentena por errores repetidos: "
-                                f"{os.path.basename(path)} retries={retries} err={e}"
+                                f"{os.path.basename(path)} retries={retries}. {user_error} raw={e}"
                             )
                         else:
                             print(
                                 f"⚠️ Queue event pendiente por error (retry {retries}/{QUEUE_MAX_RETRIES}): "
-                                f"{os.path.basename(path)} err={e}"
+                                f"{os.path.basename(path)}. {user_error} raw={e}"
                             )
                 continue
 
