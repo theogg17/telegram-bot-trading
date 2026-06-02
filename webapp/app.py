@@ -11,6 +11,7 @@ import hmac
 import json
 import os
 import queue
+import re
 import secrets
 import shutil
 import sqlite3
@@ -158,10 +159,21 @@ class LogHub:
         self.lock = threading.Lock()
         self.subscribers: set[queue.Queue[str]] = set()
 
+    @staticmethod
+    def _timestamp_prefix() -> str:
+        now = datetime.now(URUGUAY_TZ)
+        return f"[{now.hour:02d}:{now.minute:02d} - {now.day}/{now.month}/{now.year}]"
+
+    @staticmethod
+    def _has_timestamp_prefix(line: str) -> bool:
+        return bool(re.match(r"^\[\d{1,2}:\d{2} - \d{1,2}/\d{1,2}/\d{4}\]", line))
+
     def publish(self, line: str | None) -> None:
         if line is None:
             return
         clean = line.rstrip("\r\n")
+        if not self._has_timestamp_prefix(clean):
+            clean = f"{self._timestamp_prefix()} {clean}"
         with self.lock:
             self.buffer.append(clean)
             subs = list(self.subscribers)

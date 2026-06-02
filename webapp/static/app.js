@@ -29,6 +29,19 @@ let restartRemaining = null;
 let logStreamsStarted = false;
 let telegramAuthId = "";
 
+function logTimestampPrefix(date = new Date()) {
+  return `[${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")} - ${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}]`;
+}
+
+function hasLogTimestampPrefix(line) {
+  return /^\[\d{1,2}:\d{2} - \d{1,2}\/\d{1,2}\/\d{4}\]/.test(String(line || ""));
+}
+
+function withLogTimestamp(line) {
+  const clean = String(line ?? "");
+  return hasLogTimestampPrefix(clean) ? clean : `${logTimestampPrefix()} ${clean}`;
+}
+
 function showSavedToast(message) {
   if (typeof window.showSavedToast === "function") {
     window.showSavedToast(message);
@@ -36,7 +49,7 @@ function showSavedToast(message) {
 }
 
 function appendLine(el, store, line) {
-  store.push(line);
+  store.push(withLogTimestamp(line));
   if (store.length > 800) {
     store.shift();
   }
