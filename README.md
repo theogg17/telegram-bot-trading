@@ -13,6 +13,7 @@ Se divide en tres bloques:
 
 - Lector/main.py: arranca el lector (sin instalar dependencias en runtime).
 - Lector/telegram_reader.py: escucha mensajes y los escribe en Lector/data/signals.csv.
+- Lector/telegram_auth.py: vincula la sesion Telegram desde la web sin pedir codigo por consola.
 - Lector/message_parser_chatgpt.py: parsea senales usando OpenAI.
 - Lector/config.py: credenciales de Telegram/OpenAI y carga canales activos desde SQLite.
 - Operador/daemon.py: bucle que lee signals.csv y envia ordenes a MT5.
@@ -54,6 +55,14 @@ Autenticacion web (obligatoria):
 - Si defines `TRADING_BOT_WEB_USER` y `TRADING_BOT_WEB_PASSWORD`, esas credenciales se usan en todas las rutas.
 - Si no defines variables, el sistema genera credenciales y las guarda en `config/web_auth.json`.
 
+Ejemplo PowerShell:
+
+```powershell
+$env:TRADING_BOT_WEB_USER="admin"
+$env:TRADING_BOT_WEB_PASSWORD="admin"
+python webapp\app.py
+```
+
 2) Abrir `http://127.0.0.1:8000`
 
 3) Navegación:
@@ -66,6 +75,7 @@ Autenticacion web (obligatoria):
 
 4) Configurar en la web:
 - Canales de Telegram (nombre + `chat_id` + id externo opcional + activo/no activo).
+- Sesion Telegram del Lector desde `Control`: ingresar telefono, enviar codigo, confirmar codigo y, si aplica, password 2FA.
 - Perfiles de ejecución en `/presets`: `SCALP` y `SWING`.
 - Presets del Operador en `/presets`: `TOTAL_VOLUME`, `NEAR_ENTRY_PIPS_MIN`, `NEAR_ENTRY_SPREAD_MULT`, `VERIFY_ORDER_AFTER_SEND`, `AUTO_CLOSE_ON_MISMATCH`, perfil de ejecución y credenciales base MT5 (sin password).
 - Presets del Operador: guardar configuraciones reutilizables del formulario y marcar una como default.
@@ -86,6 +96,7 @@ Notas:
 - El índice de mensajes Telegram se guarda en `telegram_messages`.
 - El Lector solo escucha canales activos.
 - Si agregas/eliminas canales con el Lector ya corriendo, reinicialo para aplicar cambios.
+- Los logs de `Control` muestran cada linea con prefijo de fecha/hora local, por ejemplo `[18:30 - 1/6/2026]`, para reconstruir secuencias entre Lector y Operador.
 
 ### Opcion CLI (fallback)
 
@@ -152,8 +163,10 @@ python Operador\verificador_apertura.py --once
 - SCALP/SWING se gestionan como perfiles independientes en `/presets`.
 - El reinicio 24/7 ahora persiste la configuración de arranque cifrada en SQLite (clave local en `config/runtime_env.key`).
 - Si `cryptography` no está disponible, se usa fallback funcional no cifrado (recomendado instalar dependencias completas).
-- La API web está protegida con Basic Auth.
+- La web esta protegida con login de dashboard; las credenciales salen de `TRADING_BOT_WEB_USER`/`TRADING_BOT_WEB_PASSWORD` o de `config/web_auth.json`.
 - Eventos problemáticos en `queue/pending` se mueven a `queue/failed` tras varios reintentos.
+- Los errores de cola intentan explicar causa y accion sugerida (por ejemplo compatibilidad interna, DB bloqueada o archivo bloqueado por Windows).
+- Si MT5 devuelve `AutoTrading disabled by client`, no es un fallo de senal: activa `Algo Trading`/`AutoTrading` en MetaTrader 5 y revisa `Herramientas > Opciones > Expert Advisors`.
 
 ## Seguridad operacional del Operador
 

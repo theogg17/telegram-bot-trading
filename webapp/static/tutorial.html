@@ -38,12 +38,13 @@
         <header class="panel-header">
           <div>
             <h2>1) Seguridad de acceso web</h2>
-            <p>Ahora el dashboard exige autenticación básica en todas las rutas.</p>
+            <p>Ahora el dashboard exige login propio en todas las rutas.</p>
           </div>
         </header>
         <ul>
           <li>Prioridad 1: si defines <code>TRADING_BOT_WEB_USER</code> y <code>TRADING_BOT_WEB_PASSWORD</code>, usa esas credenciales.</li>
           <li>Prioridad 2: si no hay variables, se crea <code>config/web_auth.json</code> con usuario/password aleatorios.</li>
+          <li>Ejemplo PowerShell: <code>$env:TRADING_BOT_WEB_USER="admin"</code>, <code>$env:TRADING_BOT_WEB_PASSWORD="admin"</code> y luego <code>python webapp\app.py</code>.</li>
           <li>Recomendado para VPS: usar variables de entorno del sistema y restringir acceso de red (VPN o allowlist).</li>
         </ul>
       </section>
@@ -60,7 +61,7 @@
             <tbody>
               <tr><td>1</td><td>En <code>/presets</code>, revisa perfiles (<code>SCALP/SWING</code>) y presets.</td></tr>
               <tr><td>2</td><td>Crea asignaciones <code>Canal.Preset</code> (modo <code>real</code> o <code>virtual</code>).</td></tr>
-              <tr><td>3</td><td>En <code>/</code> (Control), carga credenciales y arranca Lector y Operador.</td></tr>
+              <tr><td>3</td><td>En <code>/</code> (Control), vincula la sesion Telegram del Lector, carga credenciales y arranca Lector y Operador.</td></tr>
               <tr><td>4</td><td>Monitorea en <code>/operaciones</code>, <code>/reportes</code> y <code>/alertas</code>.</td></tr>
               <tr><td>5</td><td>Audita mensajes en <code>/mensajes</code> por <code>message_id</code> o <code>event_id</code>.</td></tr>
             </tbody>
@@ -137,6 +138,7 @@
         <ul>
           <li>Si un evento en <code>queue/pending</code> falla al procesarse, acumula retries en SQLite.</li>
           <li>Al superar <code>QUEUE_MAX_RETRIES</code> (default: <code>5</code>), se mueve a <code>queue/failed</code> (cuarentena).</li>
+          <li>Los errores conocidos muestran causa y accion sugerida, por ejemplo compatibilidad interna, DB bloqueada o archivo bloqueado por Windows.</li>
           <li>Esto evita que un JSON corrupto frene reinicios programados o degrade todo el loop.</li>
         </ul>
       </section>
@@ -181,6 +183,19 @@
           <li><code>/reportes</code> muestra curva por <code>Canal.Preset</code>, resumen y errores paginados.</li>
           <li><code>Descargar Excel</code> exporta la tabla filtrada de errores recientes.</li>
           <li>La ruta legacy PDF redirige a Excel por compatibilidad.</li>
+        </ul>
+      </section>
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>9) Logs de Control y diagnostico</h2>
+            <p>Lectura rapida de lo que pasa entre Lector, Operador y MT5.</p>
+          </div>
+        </header>
+        <ul>
+          <li>Cada linea de logs en <code>Control</code> lleva fecha/hora al inicio, por ejemplo <code>[18:30 - 1/6/2026]</code>.</li>
+          <li>Esto ayuda a comparar eventos del Lector contra acciones del Operador sin adivinar el orden.</li>
+          <li>Si MT5 muestra <code>AutoTrading disabled by client</code>, activa <code>Algo Trading</code>/<code>AutoTrading</code> en MetaTrader 5 y revisa <code>Herramientas &gt; Opciones &gt; Expert Advisors</code>.</li>
         </ul>
       </section>
     </main>
