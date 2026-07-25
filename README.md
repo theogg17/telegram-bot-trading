@@ -34,6 +34,8 @@ Se divide en tres bloques:
 - Acceso a Telegram (API ID / API HASH).
 - API key de OpenAI (o un proxy compatible con OpenAI).
 
+Para desplegar en una VPS Windows 24/7, ver `SERVER_DEPLOY.md`.
+
 Instalacion en entorno nuevo (obligatoria):
 
 ```powershell

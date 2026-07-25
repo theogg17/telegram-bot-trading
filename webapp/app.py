@@ -22,6 +22,7 @@ import time
 import uuid
 import urllib.error
 import urllib.request
+import zipfile
 from urllib.parse import urlencode
 
 try:
@@ -63,6 +64,8 @@ QUEUE_PENDING_DIR = ROOT_DIR / "queue" / "pending"
 QUEUE_DIR = ROOT_DIR / "queue"
 LECTOR_DATA_DIR = ROOT_DIR / "Lector" / "data"
 OPERADOR_DIR = ROOT_DIR / "Operador"
+LOGS_DIR = ROOT_DIR / "logs"
+BACKUPS_DIR = ROOT_DIR / "backups"
 BYTES_PER_GB = 1024 ** 3
 DISK_USAGE_THRESHOLDS_GB = (2, 5, 8, 10)
 DISK_FREE_FATAL_BYTES = max(
@@ -71,6 +74,8 @@ DISK_FREE_FATAL_BYTES = max(
 )
 DISK_CHECK_INTERVAL_SEC = max(10, int(str(os.getenv("TRADING_BOT_DISK_CHECK_INTERVAL_SEC", "60")).strip() or "60"))
 NO_DELETE_POLICY = str(os.getenv("TRADING_BOT_NO_DELETE_POLICY", "true")).strip().lower() in ("1", "true", "yes", "on")
+LOG_ROTATE_MAX_BYTES = max(256 * 1024, int(str(os.getenv("TRADING_BOT_LOG_ROTATE_MAX_BYTES", str(5 * 1024 * 1024))).strip() or str(5 * 1024 * 1024)))
+LOG_ROTATE_BACKUPS = max(1, int(str(os.getenv("TRADING_BOT_LOG_ROTATE_BACKUPS", "5")).strip() or "5"))
 
 RESTART_TARGETS = {"operador", "lector", "both"}
 ALERT_SEVERITY_RANK = {"info": 1, "warning": 2, "critical": 3}
@@ -115,6 +120,9 @@ DEFAULT_APP_SETTINGS: dict[str, str] = {
     "auto_restart_crash_cooldown_sec": "15",
     "auto_restart_crash_max_attempts": "6",
     "auto_restart_crash_window_sec": "300",
+    "auto_start_lector_enabled": "false",
+    "auto_start_operador_enabled": "false",
+    "auto_start_delay_sec": "10",
     "alerts_enabled": "true",
     "alerts_check_interval_sec": "10",
     "alerts_queue_pending_threshold": "50",
@@ -137,6 +145,13 @@ DEFAULT_APP_SETTINGS: dict[str, str] = {
     "retention_alerts_events_days": "365",
     "retention_processed_events_days": "90",
     "retention_last_run_at": "",
+    "backup_enabled": "true",
+    "backup_interval_hours": "24",
+    "backup_keep_days": "14",
+    "backup_last_run_at": "",
+    "backup_last_status": "",
+    "backup_last_path": "",
+    "backup_last_error": "",
 }
 
 app = FastAPI()
@@ -151,10 +166,64 @@ except Exception:
 web_sessions: dict[str, dict[str, str | float]] = {}
 web_sessions_lock = threading.Lock()
 URUGUAY_TZ = ZoneInfo("America/Montevideo") if ZoneInfo is not None else timezone(timedelta(hours=-3))
+persistent_log_lock = threading.Lock()
+
+
+def _persistent_log_name(name: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name or "webapp")).strip("._")
+    return clean or "webapp"
+
+
+def _rotate_persistent_log(path: Path) -> None:
+    try:
+        if not path.exists() or int(path.stat().st_size) < int(LOG_ROTATE_MAX_BYTES):
+            return
+        for idx in range(int(LOG_ROTATE_BACKUPS), 0, -1):
+            src = path.with_name(f"{path.name}.{idx}")
+            dst = path.with_name(f"{path.name}.{idx + 1}")
+            if idx >= int(LOG_ROTATE_BACKUPS):
+                try:
+                    src.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                continue
+            if src.exists():
+                try:
+                    os.replace(str(src), str(dst))
+                except Exception:
+                    pass
+        os.replace(str(path), str(path.with_name(f"{path.name}.1")))
+    except Exception:
+        pass
+
+
+def _append_persistent_log(name: str, line: str) -> None:
+    clean = str(line or "").rstrip("\r\n")
+    if not clean:
+        return
+    try:
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        path = LOGS_DIR / f"{_persistent_log_name(name)}.log"
+        with persistent_log_lock:
+            _rotate_persistent_log(path)
+            with open(path, "a", encoding="utf-8", newline="\n") as f:
+                f.write(clean + "\n")
+    except Exception:
+        pass
+
+
+def _webapp_log(line: str) -> None:
+    now = datetime.now(URUGUAY_TZ)
+    prefix = f"[{now.hour:02d}:{now.minute:02d} - {now.day}/{now.month}/{now.year}]"
+    clean = str(line or "").rstrip("\r\n")
+    if not re.match(r"^\[\d{1,2}:\d{2} - \d{1,2}/\d{1,2}/\d{4}\]", clean):
+        clean = f"{prefix} {clean}"
+    _append_persistent_log("WEBAPP", clean)
 
 
 class LogHub:
-    def __init__(self, max_lines: int = 800):
+    def __init__(self, max_lines: int = 800, name: str = "webapp"):
+        self.name = str(name or "webapp")
         self.buffer = deque(maxlen=max_lines)
         self.lock = threading.Lock()
         self.subscribers: set[queue.Queue[str]] = set()
@@ -174,6 +243,7 @@ class LogHub:
         clean = line.rstrip("\r\n")
         if not self._has_timestamp_prefix(clean):
             clean = f"{self._timestamp_prefix()} {clean}"
+        _append_persistent_log(self.name, clean)
         with self.lock:
             self.buffer.append(clean)
             subs = list(self.subscribers)
@@ -202,7 +272,7 @@ class ProcessManager:
         self.cwd = cwd
         self.proc: subprocess.Popen[str] | None = None
         self.thread: threading.Thread | None = None
-        self.log = LogHub()
+        self.log = LogHub(name=name)
         self.last_exit: int | None = None
         self.last_env: dict[str, str] | None = None
         self.desired_running: bool = False
@@ -252,8 +322,8 @@ class ProcessManager:
             self.log.publish(line)
         rc = self.proc.poll()
         self.last_exit = rc
-        if rc is not None and rc != 0:
-            self.desired_running = False
+        # Keep desired_running=True on unexpected exits so the crash watchdog
+        # can restart the process. stop() sets it to False before terminate().
         self.log.publish(f"[{self.name}] exited code={rc}")
         try:
             self.proc.stdout.close()
@@ -3341,6 +3411,7 @@ def _search_messages(query: str, limit: int):
 restart_lock = threading.Lock()
 alerts_lock = threading.Lock()
 workers_started = False
+backup_lock = threading.Lock()
 disk_monitor_lock = threading.Lock()
 disk_monitor_last_ts = 0.0
 disk_monitor_last_snapshot: dict[str, int | float] = {}
@@ -3428,7 +3499,9 @@ def _project_storage_snapshot(force: bool = False) -> dict[str, int | float]:
     lector_data_bytes = _path_size_bytes(LECTOR_DATA_DIR)
     operador_csv_bytes = _operador_csv_size_bytes()
     db_family_bytes = _db_family_size_bytes()
-    project_bytes = int(queue_bytes + lector_data_bytes + operador_csv_bytes + db_family_bytes)
+    logs_bytes = _path_size_bytes(LOGS_DIR)
+    backups_bytes = _path_size_bytes(BACKUPS_DIR)
+    project_bytes = int(queue_bytes + lector_data_bytes + operador_csv_bytes + db_family_bytes + logs_bytes + backups_bytes)
 
     du = shutil.disk_usage(str(ROOT_DIR))
     snapshot: dict[str, int | float] = {
@@ -3442,6 +3515,10 @@ def _project_storage_snapshot(force: bool = False) -> dict[str, int | float]:
         "operador_csv_gb": _bytes_to_gb(operador_csv_bytes),
         "db_family_bytes": int(db_family_bytes),
         "db_family_gb": _bytes_to_gb(db_family_bytes),
+        "logs_bytes": int(logs_bytes),
+        "logs_gb": _bytes_to_gb(logs_bytes),
+        "backups_bytes": int(backups_bytes),
+        "backups_gb": _bytes_to_gb(backups_bytes),
         "disk_total_bytes": int(du.total),
         "disk_used_bytes": int(du.used),
         "disk_free_bytes": int(du.free),
@@ -3529,6 +3606,103 @@ def _evaluate_storage_alerts(send_threshold_alerts: bool = True) -> dict[str, in
     else:
         _resolve_alert_code("DISK_SPACE_FATAL")
     return snapshot
+
+
+def _auto_start_settings_snapshot() -> dict:
+    raw = _settings_values()
+    return {
+        "lector_enabled": _setting_get_bool(raw, "auto_start_lector_enabled", False),
+        "operador_enabled": _setting_get_bool(raw, "auto_start_operador_enabled", False),
+        "delay_sec": max(0, _setting_get_int(raw, "auto_start_delay_sec", 10)),
+    }
+
+
+def _set_process_auto_start(process_name: str, enabled: bool) -> None:
+    pname = str(process_name or "").strip().lower()
+    if pname == PROCESS_NAME_LECTOR:
+        _setting_set("auto_start_lector_enabled", "true" if bool(enabled) else "false")
+    elif pname == PROCESS_NAME_OPERADOR:
+        _setting_set("auto_start_operador_enabled", "true" if bool(enabled) else "false")
+
+
+def _attempt_auto_start_process(process_name: str, manager: ProcessManager) -> dict:
+    pname = str(process_name or "").strip().lower()
+    if manager.running():
+        manager.desired_running = True
+        return {"process": pname, "status": "already_running"}
+    env = manager.last_env or _restore_process_runtime_env(pname)
+    if not env:
+        msg = f"{pname} sin entorno persistido para autoarranque"
+        _webapp_log(f"[AUTO_START] {msg}")
+        _upsert_alert(
+            source="autostart",
+            code=f"AUTOSTART_MISSING_ENV_{pname.upper()}",
+            severity="warning",
+            title=f"Autoarranque sin configuracion ({pname.upper()})",
+            details=msg,
+            data={"process": pname},
+        )
+        return {"process": pname, "status": "missing_env"}
+
+    if pname == PROCESS_NAME_LECTOR:
+        if _active_channels_count() <= 0:
+            msg = "Lector no autoarranca porque no hay canales activos"
+            _webapp_log(f"[AUTO_START] {msg}")
+            return {"process": pname, "status": "skipped_no_active_channels"}
+        if not LECTOR_SESSION_PATH.exists():
+            msg = "Lector no autoarranca porque falta Lector/session_name.session"
+            _webapp_log(f"[AUTO_START] {msg}")
+            _upsert_alert(
+                source="autostart",
+                code="AUTOSTART_LECTOR_MISSING_TELEGRAM_SESSION",
+                severity="warning",
+                title="Autoarranque Lector sin sesion Telegram",
+                details=msg,
+                data={"process": pname},
+            )
+            return {"process": pname, "status": "missing_telegram_session"}
+
+    try:
+        manager.start(env)
+        _persist_process_runtime_env(pname, env)
+        _resolve_alert_code(f"AUTOSTART_MISSING_ENV_{pname.upper()}")
+        _resolve_alert_code(f"AUTOSTART_FAILED_{pname.upper()}")
+        _webapp_log(f"[AUTO_START] {pname} iniciado")
+        return {"process": pname, "status": "started"}
+    except Exception as exc:
+        msg = str(exc)
+        _webapp_log(f"[AUTO_START] {pname} fallo: {msg}")
+        _upsert_alert(
+            source="autostart",
+            code=f"AUTOSTART_FAILED_{pname.upper()}",
+            severity="critical" if pname == PROCESS_NAME_OPERADOR else "warning",
+            title=f"Fallo autoarranque {pname.upper()}",
+            details=msg,
+            data={"process": pname},
+        )
+        return {"process": pname, "status": "error", "error": msg}
+
+
+def _auto_start_processes_once() -> list[dict]:
+    cfg = _auto_start_settings_snapshot()
+    delay = int(cfg.get("delay_sec") or 0)
+    if delay > 0:
+        time.sleep(delay)
+    results: list[dict] = []
+    if bool(cfg.get("lector_enabled")):
+        results.append(_attempt_auto_start_process(PROCESS_NAME_LECTOR, lector_manager))
+    if bool(cfg.get("operador_enabled")):
+        results.append(_attempt_auto_start_process(PROCESS_NAME_OPERADOR, operador_manager))
+    if results:
+        _webapp_log(f"[AUTO_START] resultados={json.dumps(results, ensure_ascii=True)}")
+    return results
+
+
+def _autostart_worker_loop() -> None:
+    try:
+        _auto_start_processes_once()
+    except Exception as exc:
+        _webapp_log(f"[AUTO_START] error no controlado: {exc}")
 
 
 def _restart_settings_snapshot() -> dict:
@@ -4482,6 +4656,179 @@ def _retention_worker_loop():
             time.sleep(30)
 
 
+def _backup_settings_snapshot() -> dict:
+    raw = _settings_values()
+    last_path = str(raw.get("backup_last_path", "") or "").strip()
+    last_status = str(raw.get("backup_last_status", "") or "").strip()
+    last_error = str(raw.get("backup_last_error", "") or "").strip()
+    return {
+        "enabled": _setting_get_bool(raw, "backup_enabled", True),
+        "interval_hours": max(1, _setting_get_int(raw, "backup_interval_hours", 24)),
+        "keep_days": max(1, _setting_get_int(raw, "backup_keep_days", 14)),
+        "last_run_at": str(raw.get("backup_last_run_at", "") or "").strip(),
+        "last_status": last_status,
+        "last_path": last_path,
+        "last_error": last_error,
+        "dir": str(BACKUPS_DIR),
+    }
+
+
+def _backup_due(cfg: dict) -> bool:
+    if not bool(cfg.get("enabled")):
+        return False
+    last_dt = _parse_iso_utc_or_none(str(cfg.get("last_run_at") or ""))
+    if last_dt is None:
+        return True
+    now_dt = datetime.now(URUGUAY_TZ).replace(tzinfo=None)
+    elapsed = (now_dt - last_dt).total_seconds()
+    return elapsed >= (int(cfg.get("interval_hours") or 24) * 3600)
+
+
+def _zip_add_path(zf: zipfile.ZipFile, src: Path, arc_prefix: str = "") -> int:
+    count = 0
+    p = Path(src)
+    if not p.exists():
+        return 0
+    if p.is_file():
+        arcname = str(Path(arc_prefix) / p.name) if arc_prefix else str(p.relative_to(ROOT_DIR))
+        zf.write(str(p), arcname.replace("\\", "/"))
+        return 1
+    for child in p.rglob("*"):
+        if not child.is_file():
+            continue
+        rel = child.relative_to(p)
+        arcname = str(Path(arc_prefix) / rel) if arc_prefix else str(child.relative_to(ROOT_DIR))
+        zf.write(str(child), arcname.replace("\\", "/"))
+        count += 1
+    return count
+
+
+def _write_sqlite_backup(dst_path: Path) -> bool:
+    if not DB_PATH.exists():
+        return False
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    src = None
+    dst = None
+    try:
+        src = sqlite3.connect(str(DB_PATH), timeout=30.0)
+        dst = sqlite3.connect(str(dst_path), timeout=30.0)
+        src.backup(dst)
+        dst.commit()
+        return True
+    finally:
+        if dst is not None:
+            dst.close()
+        if src is not None:
+            src.close()
+
+
+def _prune_old_backups(keep_days: int) -> int:
+    if bool(NO_DELETE_POLICY):
+        return 0
+    cutoff = time.time() - (max(1, int(keep_days)) * 86400)
+    deleted = 0
+    try:
+        for path in BACKUPS_DIR.glob("trading_bot_backup_*.zip"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    deleted += 1
+            except Exception:
+                continue
+    except Exception:
+        return int(deleted)
+    return int(deleted)
+
+
+def _run_backup_once(reason: str = "manual") -> dict:
+    cfg = _backup_settings_snapshot()
+    if not bool(cfg.get("enabled")) and str(reason) != "manual":
+        return {"status": "disabled", "path": ""}
+    with backup_lock:
+        BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(URUGUAY_TZ).strftime("%Y%m%d_%H%M%S")
+        tmp_dir = BACKUPS_DIR / f".tmp_{stamp}"
+        tmp_zip = BACKUPS_DIR / f"trading_bot_backup_{stamp}.zip.tmp"
+        final_zip = BACKUPS_DIR / f"trading_bot_backup_{stamp}.zip"
+        copied = 0
+        db_snapshot = tmp_dir / "config" / "trading_bot.db"
+        try:
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            db_ok = _write_sqlite_backup(db_snapshot)
+            metadata = {
+                "created_at": _utc_now_iso(),
+                "reason": str(reason or "manual"),
+                "db_path": str(DB_PATH),
+                "root_dir": str(ROOT_DIR),
+                "db_snapshot": bool(db_ok),
+            }
+            metadata_path = tmp_dir / "backup_metadata.json"
+            metadata_path.write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
+
+            with zipfile.ZipFile(str(tmp_zip), "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+                copied += _zip_add_path(zf, metadata_path, "metadata")
+                if db_ok:
+                    copied += _zip_add_path(zf, db_snapshot, "config")
+                copied += _zip_add_path(zf, LECTOR_DATA_DIR, "Lector/data")
+                if OPERADOR_DIR.exists():
+                    for csv_path in OPERADOR_DIR.glob("*.csv"):
+                        copied += _zip_add_path(zf, csv_path, "Operador")
+                copied += _zip_add_path(zf, QUEUE_PENDING_DIR, "queue/pending")
+                failed_dir = QUEUE_DIR / "failed"
+                copied += _zip_add_path(zf, failed_dir, "queue/failed")
+            os.replace(str(tmp_zip), str(final_zip))
+            deleted = _prune_old_backups(int(cfg.get("keep_days") or 14))
+            _setting_set("backup_last_run_at", _utc_now_iso())
+            _setting_set("backup_last_status", "ok")
+            _setting_set("backup_last_path", str(final_zip))
+            _setting_set("backup_last_error", "")
+            _resolve_alert_code("BACKUP_FAILED")
+            _webapp_log(f"[BACKUP] ok path={final_zip} files={copied} pruned={deleted}")
+            return {
+                "status": "ok",
+                "path": str(final_zip),
+                "files": int(copied),
+                "pruned": int(deleted),
+            }
+        except Exception as exc:
+            try:
+                if tmp_zip.exists():
+                    tmp_zip.unlink(missing_ok=True)
+            except Exception:
+                pass
+            err = str(exc)
+            _setting_set("backup_last_run_at", _utc_now_iso())
+            _setting_set("backup_last_status", "error")
+            _setting_set("backup_last_error", err)
+            _upsert_alert(
+                source="backup",
+                code="BACKUP_FAILED",
+                severity="critical",
+                title="Fallo backup local",
+                details=err,
+                data={"reason": reason, "dir": str(BACKUPS_DIR)},
+            )
+            _webapp_log(f"[BACKUP] error {err}")
+            return {"status": "error", "path": "", "error": err}
+        finally:
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+
+def _backup_worker_loop():
+    while True:
+        try:
+            cfg = _backup_settings_snapshot()
+            if _backup_due(cfg):
+                _run_backup_once(reason="scheduled")
+            time.sleep(60)
+        except Exception as exc:
+            _webapp_log(f"[BACKUP] worker error {exc}")
+            time.sleep(60)
+
+
 def _start_background_workers_once() -> None:
     global workers_started
     if workers_started:
@@ -4490,6 +4837,8 @@ def _start_background_workers_once() -> None:
     threading.Thread(target=_restart_worker_loop, daemon=True, name="restart-worker").start()
     threading.Thread(target=_alerts_worker_loop, daemon=True, name="alerts-worker").start()
     threading.Thread(target=_retention_worker_loop, daemon=True, name="retention-worker").start()
+    threading.Thread(target=_backup_worker_loop, daemon=True, name="backup-worker").start()
+    threading.Thread(target=_autostart_worker_loop, daemon=True, name="autostart-worker").start()
 
 
 def _merge_health_status(current: str, candidate: str) -> str:
@@ -4539,6 +4888,31 @@ def _health_snapshot() -> dict:
     if int(queue_stats["oldest_age_sec"]) >= int(alert_cfg["alerts_queue_oldest_sec"]):
         status = _merge_health_status(status, "degraded")
         warnings.append("queue_pending_old")
+
+    auto_start_cfg = _auto_start_settings_snapshot()
+    checks["auto_start"] = dict(auto_start_cfg)
+
+    backup_cfg = _backup_settings_snapshot()
+    checks["backup"] = {
+        "enabled": bool(backup_cfg["enabled"]),
+        "interval_hours": int(backup_cfg["interval_hours"]),
+        "keep_days": int(backup_cfg["keep_days"]),
+        "last_run_at": str(backup_cfg["last_run_at"] or ""),
+        "last_status": str(backup_cfg["last_status"] or ""),
+        "last_path": str(backup_cfg["last_path"] or ""),
+    }
+    if bool(backup_cfg["enabled"]):
+        last_status = str(backup_cfg["last_status"] or "").lower()
+        last_dt = _parse_iso_utc_or_none(str(backup_cfg["last_run_at"] or ""))
+        if last_status == "error":
+            status = _merge_health_status(status, "error")
+            errors.append("backup_failed")
+        elif last_dt is not None:
+            now_dt = datetime.now(URUGUAY_TZ).replace(tzinfo=None)
+            max_age = int(backup_cfg["interval_hours"]) * 7200
+            if (now_dt - last_dt).total_seconds() > max_age:
+                status = _merge_health_status(status, "degraded")
+                warnings.append("backup_stale")
 
     runtime: dict[str, dict] = {}
     for pname, manager, _target in _crash_watchdog_specs():
@@ -4621,6 +4995,30 @@ def _sse_stream(hub: LogHub):
         hub.unsubscribe(q)
 
 
+def _runtime_24x7_snapshot() -> dict:
+    return {
+        "health": _health_snapshot(),
+        "auto_start": _auto_start_settings_snapshot(),
+        "auto_restart": _restart_settings_snapshot(),
+        "backup": _backup_settings_snapshot(),
+        "alerts": _alerts_settings_snapshot(),
+        "retention": _retention_settings_snapshot(),
+        "logs": {
+            "dir": str(LOGS_DIR),
+            "rotate_max_bytes": int(LOG_ROTATE_MAX_BYTES),
+            "rotate_backups": int(LOG_ROTATE_BACKUPS),
+            "files": [
+                str(p.name)
+                for p in sorted(LOGS_DIR.glob("*.log"))
+            ] if LOGS_DIR.exists() else [],
+        },
+        "external_watchdog": {
+            "script": str(ROOT_DIR / "scripts" / "register_webapp_watchdog_task.ps1"),
+            "health_url": "http://127.0.0.1:8000/healthz",
+        },
+    }
+
+
 @app.get("/")
 def index():
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
@@ -4694,12 +5092,29 @@ def healthz():
     return JSONResponse(snap, status_code=http_code)
 
 
+@app.get("/api/health/24x7")
+def health_24x7():
+    return JSONResponse(_runtime_24x7_snapshot())
+
+
+@app.get("/api/backup/status")
+def backup_status():
+    return JSONResponse({"config": _backup_settings_snapshot()})
+
+
+@app.post("/api/backup/run")
+def backup_run():
+    return JSONResponse({"result": _run_backup_once(reason="api")})
+
+
 @app.get("/api/status")
 def status():
     presets = _list_operator_presets()
     assignments = _list_assignments()
     profiles = _list_execution_profiles()
     restart_cfg = _restart_settings_snapshot()
+    auto_start_cfg = _auto_start_settings_snapshot()
+    backup_cfg = _backup_settings_snapshot()
     queue_stats = _queue_pending_stats()
     storage_stats = _project_storage_snapshot()
     health = _health_snapshot()
@@ -4717,8 +5132,15 @@ def status():
             "mt5_terminal_default": MT5_TERMINAL_DEFAULT,
             "operador_defaults": _get_operator_defaults(),
             "auto_restart": restart_cfg,
+            "auto_start": auto_start_cfg,
+            "backup": backup_cfg,
             "queue_pending": queue_stats,
             "storage": storage_stats,
+            "logs": {
+                "dir": str(LOGS_DIR),
+                "rotate_max_bytes": int(LOG_ROTATE_MAX_BYTES),
+                "rotate_backups": int(LOG_ROTATE_BACKUPS),
+            },
             "health": health,
             "counts": {
                 "channels": len(_list_channels()),
@@ -5920,6 +6342,7 @@ def start_lector(payload: LectorStartRequest):
     try:
         lector_manager.start(env)
         _persist_process_runtime_env(PROCESS_NAME_LECTOR, env)
+        _set_process_auto_start(PROCESS_NAME_LECTOR, True)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -5929,6 +6352,7 @@ def start_lector(payload: LectorStartRequest):
 @app.post("/api/stop/lector")
 def stop_lector():
     lector_manager.stop()
+    _set_process_auto_start(PROCESS_NAME_LECTOR, False)
     return {"status": "stopped"}
 
 
@@ -5980,6 +6404,7 @@ def start_operador(payload: OperadorStartRequest):
     try:
         operador_manager.start(env)
         _persist_process_runtime_env(PROCESS_NAME_OPERADOR, env)
+        _set_process_auto_start(PROCESS_NAME_OPERADOR, True)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -5989,6 +6414,7 @@ def start_operador(payload: OperadorStartRequest):
 @app.post("/api/stop/operador")
 def stop_operador():
     operador_manager.stop()
+    _set_process_auto_start(PROCESS_NAME_OPERADOR, False)
     return {"status": "stopped"}
 
 
@@ -6005,5 +6431,11 @@ def logs_operador():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning", access_log=False)
+    host = str(os.getenv("TRADING_BOT_HOST", "127.0.0.1") or "127.0.0.1").strip()
+    try:
+        port = int(str(os.getenv("TRADING_BOT_PORT", "8000") or "8000").strip())
+    except Exception:
+        port = 8000
+    _webapp_log(f"[WEBAPP] starting uvicorn host={host} port={port}")
+    uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)
 

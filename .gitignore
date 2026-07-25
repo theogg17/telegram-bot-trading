@@ -11,6 +11,8 @@ config/trading_bot.db
 config/trading_bot.db-*
 config/web_auth.json
 config/runtime_env.key
+logs/
+backups/
 *.session
 
 # Secrets
