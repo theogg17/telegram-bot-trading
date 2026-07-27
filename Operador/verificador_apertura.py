@@ -19,11 +19,12 @@ from config_operador import (
     VERIFY_POLL_SECONDS,
     AUTO_CLOSE_ON_MISMATCH,
 )
-from daemon import mt5_init
+from daemon import _mt5_order_delete, _mt5_order_send, mt5_init
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 from common.csv_guard import atomic_write_dataframe_csv, csv_file_lock
+from common.single_instance import AlreadyRunningError, single_instance
 
 URUGUAY_TZ = ZoneInfo('America/Montevideo') if ZoneInfo is not None else datetime.timezone(datetime.timedelta(hours=-3))
 
@@ -122,13 +123,13 @@ def _close_position(position):
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_RETURN,
     }
-    result = mt5.order_send(req)
+    result = _mt5_order_send(req)
     if result and result.retcode == mt5.TRADE_RETCODE_DONE:
         return True, "closed"
     return False, getattr(result, "comment", "close_failed")
 
 def _cancel_order(order):
-    result = mt5.order_delete(order.ticket)
+    result = _mt5_order_delete(order.ticket)
     if isinstance(result, bool):
         return (result, "deleted" if result else str(mt5.last_error()))
     if result and result.retcode == mt5.TRADE_RETCODE_DONE:
@@ -202,6 +203,11 @@ def main():
         time.sleep(VERIFY_POLL_SECONDS)
 
 if __name__ == "__main__":
-    main()
+    try:
+        with single_instance("verificador_apertura"):
+            main()
+    except AlreadyRunningError as exc:
+        print(f"[INSTANCE] Verificador no iniciado: {exc}", file=sys.stderr)
+        raise SystemExit(73) from None
 
 

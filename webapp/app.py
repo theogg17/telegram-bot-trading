@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 import base64
 import csv
+import hashlib
 import hmac
 import json
 import os
@@ -76,6 +77,10 @@ DISK_CHECK_INTERVAL_SEC = max(10, int(str(os.getenv("TRADING_BOT_DISK_CHECK_INTE
 NO_DELETE_POLICY = str(os.getenv("TRADING_BOT_NO_DELETE_POLICY", "true")).strip().lower() in ("1", "true", "yes", "on")
 LOG_ROTATE_MAX_BYTES = max(256 * 1024, int(str(os.getenv("TRADING_BOT_LOG_ROTATE_MAX_BYTES", str(5 * 1024 * 1024))).strip() or str(5 * 1024 * 1024)))
 LOG_ROTATE_BACKUPS = max(1, int(str(os.getenv("TRADING_BOT_LOG_ROTATE_BACKUPS", "5")).strip() or "5"))
+BACKUP_RETRY_DELAY_SEC = max(
+    10,
+    int(str(os.getenv("TRADING_BOT_BACKUP_RETRY_DELAY_SEC", "60")).strip() or "60"),
+)
 
 RESTART_TARGETS = {"operador", "lector", "both"}
 ALERT_SEVERITY_RANK = {"info": 1, "warning": 2, "critical": 3}
@@ -107,6 +112,9 @@ RUNTIME_ENV_KEYS = {
         "NEAR_ENTRY_SPREAD_MULT",
         "VERIFY_ORDER_AFTER_SEND",
         "AUTO_CLOSE_ON_MISMATCH",
+        "TRADING_BOT_EXECUTION_ARMED",
+        "TRADING_BOT_REQUIRE_DEMO_ACCOUNT",
+        "ENTRY_EVENT_TTL_SEC",
     ],
 }
 
@@ -270,90 +278,189 @@ class ProcessManager:
         self.name = name
         self.cmd = cmd
         self.cwd = cwd
+        self._state_lock = threading.RLock()
+        self._control_lock = threading.RLock()
         self.proc: subprocess.Popen[str] | None = None
         self.thread: threading.Thread | None = None
         self.log = LogHub(name=name)
         self.last_exit: int | None = None
         self.last_env: dict[str, str] | None = None
         self.desired_running: bool = False
+        self.started_at: str | None = None
+        self.exited_at: str | None = None
+        self._running_since_monotonic: float | None = None
 
-    def running(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
-
-    def start(self, env: dict) -> None:
-        if self.running():
-            raise RuntimeError(f"{self.name} already running")
-        proc_env = dict(env)
-        proc_env["PYTHONUNBUFFERED"] = "1"
-        proc_env.setdefault("PYTHONUTF8", "1")
-        proc_env.setdefault("PYTHONIOENCODING", "utf-8")
-        self.last_env = dict(proc_env)
-        self.desired_running = True
-        self.log.publish(f"[{self.name}] starting...")
-        self.log.publish(f"[{self.name}] cwd={self.cwd}")
-        self.log.publish(f"[{self.name}] cmd={' '.join(self.cmd)}")
-        self.proc = subprocess.Popen(
-            self.cmd,
-            cwd=self.cwd,
-            env=proc_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-        )
-        self.thread = threading.Thread(target=self._reader, daemon=True)
-        self.thread.start()
-        self.log.publish(f"[{self.name}] started pid={self.proc.pid}")
-
-        time.sleep(1.0)
-        rc = self.proc.poll()
-        if rc is not None:
-            self.last_exit = rc
-            self.desired_running = False
-            raise RuntimeError(f"{self.name} exited immediately with code={rc}. Revisa el log de {self.name}.")
-        self.log.publish(f"[{self.name}] running after startup check")
-
-    def _reader(self) -> None:
-        if not self.proc or not self.proc.stdout:
+    def _record_exit_locked(self, proc: subprocess.Popen[str], rc: int | None) -> None:
+        if self.proc is not proc:
             return
-        for line in self.proc.stdout:
-            self.log.publish(line)
-        rc = self.proc.poll()
         self.last_exit = rc
-        # Keep desired_running=True on unexpected exits so the crash watchdog
-        # can restart the process. stop() sets it to False before terminate().
-        self.log.publish(f"[{self.name}] exited code={rc}")
-        try:
-            self.proc.stdout.close()
-        except Exception:
-            pass
-
-    def stop(self) -> None:
-        self.desired_running = False
-        if not self.running():
-            return
-        self.log.publish(f"[{self.name}] stopping...")
-        assert self.proc is not None
-        self.proc.terminate()
-        try:
-            self.proc.wait(timeout=10)
-        except Exception:
-            self.proc.kill()
-        rc = self.proc.poll()
-        self.last_exit = rc
-        self.log.publish(f"[{self.name}] stopped code={rc}")
+        self.exited_at = _utc_now_iso()
+        self._running_since_monotonic = None
         self.proc = None
 
+    def state_snapshot(self) -> dict[str, object]:
+        with self._state_lock:
+            proc = self.proc
+            running = proc is not None and proc.poll() is None
+            if proc is not None and not running:
+                self._record_exit_locked(proc, proc.poll())
+                proc = None
+            uptime_sec = 0.0
+            if running and self._running_since_monotonic is not None:
+                uptime_sec = max(0.0, time.monotonic() - self._running_since_monotonic)
+            return {
+                "running": bool(running),
+                "pid": proc.pid if proc is not None else None,
+                "last_exit": self.last_exit,
+                "desired_running": bool(self.desired_running),
+                "started_at": self.started_at,
+                "exited_at": self.exited_at,
+                "uptime_sec": round(uptime_sec, 3),
+            }
+
+    def running(self) -> bool:
+        return bool(self.state_snapshot()["running"])
+
+    def uptime_seconds(self) -> float:
+        return float(self.state_snapshot()["uptime_sec"])
+
+    def set_desired_running(self, desired: bool) -> None:
+        with self._state_lock:
+            self.desired_running = bool(desired)
+
+    def set_last_env(self, env: dict[str, str] | None) -> None:
+        with self._state_lock:
+            self.last_env = dict(env) if env else None
+
+    def get_last_env(self) -> dict[str, str] | None:
+        with self._state_lock:
+            return dict(self.last_env) if self.last_env else None
+
+    def start(self, env: dict) -> None:
+        with self._control_lock:
+            if self.running():
+                raise RuntimeError(f"{self.name} already running")
+            proc_env = dict(env)
+            proc_env["PYTHONUNBUFFERED"] = "1"
+            proc_env.setdefault("PYTHONUTF8", "1")
+            proc_env.setdefault("PYTHONIOENCODING", "utf-8")
+            with self._state_lock:
+                self.last_env = dict(proc_env)
+                # This is the operator's intent. It deliberately remains true if
+                # Popen fails or the child exits during the startup check, so the
+                # crash watchdog can retry it with its normal rate limits.
+                self.desired_running = True
+            self.log.publish(f"[{self.name}] starting...")
+            self.log.publish(f"[{self.name}] cwd={self.cwd}")
+            self.log.publish(f"[{self.name}] cmd={' '.join(self.cmd)}")
+            try:
+                proc = subprocess.Popen(
+                    self.cmd,
+                    cwd=self.cwd,
+                    env=proc_env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                )
+            except Exception as exc:
+                self.log.publish(f"[{self.name}] failed to start: {exc}")
+                raise
+            with self._state_lock:
+                self.proc = proc
+                self.started_at = _utc_now_iso()
+                self._running_since_monotonic = time.monotonic()
+                thread = threading.Thread(
+                    target=self._reader,
+                    args=(proc,),
+                    daemon=True,
+                    name=f"{self.name.lower()}-output-{proc.pid}",
+                )
+                self.thread = thread
+            thread.start()
+            self.log.publish(f"[{self.name}] started pid={proc.pid}")
+
+            time.sleep(1.0)
+            rc = proc.poll()
+            if rc is not None:
+                with self._state_lock:
+                    self._record_exit_locked(proc, rc)
+                raise RuntimeError(f"{self.name} exited immediately with code={rc}. Revisa el log de {self.name}.")
+            self.log.publish(f"[{self.name}] running after startup check")
+
+    def _reader(self, proc: subprocess.Popen[str]) -> None:
+        try:
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    self.log.publish(line)
+            rc = proc.wait()
+            with self._state_lock:
+                self._record_exit_locked(proc, rc)
+            # Keep desired_running=True on unexpected exits. stop() changes the
+            # intent before asking the child to terminate.
+            self.log.publish(f"[{self.name}] exited code={rc}")
+        except Exception as exc:
+            self.log.publish(f"[{self.name}] output reader error: {exc}")
+            rc = proc.poll()
+            if rc is not None:
+                with self._state_lock:
+                    self._record_exit_locked(proc, rc)
+        finally:
+            try:
+                if proc.stdout is not None:
+                    proc.stdout.close()
+            except Exception:
+                pass
+
+    def stop(self, timeout_sec: float = 10.0) -> None:
+        with self._control_lock:
+            with self._state_lock:
+                self.desired_running = False
+                proc = self.proc
+                if proc is None:
+                    return
+                rc = proc.poll()
+                if rc is not None:
+                    self._record_exit_locked(proc, rc)
+                    return
+            self.log.publish(f"[{self.name}] stopping...")
+            try:
+                proc.terminate()
+            except Exception as exc:
+                self.log.publish(f"[{self.name}] terminate warning: {exc}")
+            try:
+                rc = proc.wait(timeout=max(0.1, float(timeout_sec)))
+            except subprocess.TimeoutExpired:
+                self.log.publish(f"[{self.name}] graceful stop timed out; killing pid={proc.pid}")
+                proc.kill()
+                try:
+                    rc = proc.wait(timeout=5.0)
+                except Exception:
+                    rc = proc.poll()
+            except Exception as exc:
+                self.log.publish(f"[{self.name}] wait warning: {exc}")
+                rc = proc.poll()
+            with self._state_lock:
+                self._record_exit_locked(proc, rc)
+            self.log.publish(f"[{self.name}] stopped code={rc}")
+
     def restart(self) -> None:
-        if not self.last_env:
-            raise RuntimeError(f"{self.name} has no previous env to restart")
-        was_running = self.running()
-        if was_running:
-            self.stop()
-            time.sleep(0.2)
-        self.start(dict(self.last_env))
+        with self._control_lock:
+            last_env = self.get_last_env()
+            if not last_env:
+                raise RuntimeError(f"{self.name} has no previous env to restart")
+            if self.running():
+                self.stop()
+                time.sleep(0.2)
+            self.start(last_env)
+
+    def shutdown(self, timeout_sec: float = 10.0) -> None:
+        try:
+            self.stop(timeout_sec=timeout_sec)
+        except Exception as exc:
+            self.log.publish(f"[{self.name}] error during managed shutdown: {exc}")
 
 
 LECTOR_CMD = [PYTHON_EXE, "-u", str(ROOT_DIR / "Lector" / "main.py")]
@@ -400,6 +507,7 @@ class OperadorStartRequest(BaseModel):
     near_entry_spread_mult: Optional[float] = None
     verify_order_after_send: Optional[bool] = None
     auto_close_on_mismatch: Optional[bool] = None
+    execution_armed: Optional[bool] = False
 
 
 class ExecutionProfilePayload(BaseModel):
@@ -933,10 +1041,10 @@ def _restore_process_manager_env_cache() -> None:
         print("[SECURITY] cryptography no está instalada: runtime env persistence usa fallback no cifrado.")
     lenv = _restore_process_runtime_env(PROCESS_NAME_LECTOR)
     if lenv:
-        lector_manager.last_env = lenv
+        lector_manager.set_last_env(lenv)
     oenv = _restore_process_runtime_env(PROCESS_NAME_OPERADOR)
     if oenv:
-        operador_manager.last_env = oenv
+        operador_manager.set_last_env(oenv)
 
 
 def _queue_pending_stats() -> dict[str, int]:
@@ -1979,15 +2087,19 @@ def _sync_channel_preset_assignments_conn(
         for pid in preset_ids:
             key = (int(cid), int(pid))
             desired_mode = "real" if (real_preset_id is not None and int(pid) == int(real_preset_id)) else "virtual"
+            # A newly created real assignment must be explicitly enabled by
+            # the operator. Virtual assignments can remain convenient by
+            # default without creating an MT5 execution path.
+            desired_active = 0 if desired_mode == "real" else 1
             row = existing_by_pair.get(key)
             if row is None:
                 conn.execute(
                     """
                     INSERT INTO channel_config_assignments
                     (channel_id, config_id, mode, is_active, created_at, updated_at)
-                    VALUES (?, ?, ?, 1, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (int(cid), int(pid), desired_mode, now, now),
+                    (int(cid), int(pid), desired_mode, desired_active, now, now),
                 )
                 aid = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
                 snap = _assignment_snapshot_by_id(conn, aid)
@@ -2005,13 +2117,16 @@ def _sync_channel_preset_assignments_conn(
             prev_mode = str(row["mode"] or "virtual")
             prev_active = int(row["is_active"] or 0)
             if prev_mode != desired_mode:
+                # Promoting an existing virtual pair to the real execution
+                # slot also fails closed. A human must activate it afterwards.
+                next_active = 0 if desired_mode == "real" else prev_active
                 conn.execute(
                     """
                     UPDATE channel_config_assignments
-                    SET mode = ?, updated_at = ?
+                    SET mode = ?, is_active = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (desired_mode, now, int(row["id"])),
+                    (desired_mode, next_active, now, int(row["id"])),
                 )
                 snap = _assignment_snapshot_by_id(conn, int(row["id"]))
                 _append_channel_preset_event_conn(
@@ -2026,7 +2141,7 @@ def _sync_channel_preset_assignments_conn(
                         "from_mode": prev_mode,
                         "to_mode": desired_mode,
                         "from_is_active": prev_active,
-                        "to_is_active": prev_active,
+                        "to_is_active": next_active,
                         **meta,
                     },
                     ts=now,
@@ -3426,6 +3541,7 @@ crash_restart_next_try_ts: dict[str, float] = {
     PROCESS_NAME_LECTOR: 0.0,
     PROCESS_NAME_OPERADOR: 0.0,
 }
+shutdown_event = threading.Event()
 
 
 def _bytes_to_gb(value: int | float) -> float:
@@ -3552,14 +3668,13 @@ def _trigger_emergency_shutdown_disk(snapshot: dict[str, int | float]) -> None:
         f"free_bytes={snapshot.get('disk_free_bytes')} threshold_bytes={DISK_FREE_FATAL_BYTES}. "
         "Apagando sistema."
     )
+    shutdown_event.set()
     try:
-        if lector_manager.running():
-            lector_manager.stop()
+        operador_manager.shutdown(timeout_sec=10.0)
     except Exception:
         pass
     try:
-        if operador_manager.running():
-            operador_manager.stop()
+        lector_manager.shutdown(timeout_sec=10.0)
     except Exception:
         pass
     try:
@@ -3627,10 +3742,12 @@ def _set_process_auto_start(process_name: str, enabled: bool) -> None:
 
 def _attempt_auto_start_process(process_name: str, manager: ProcessManager) -> dict:
     pname = str(process_name or "").strip().lower()
+    if shutdown_event.is_set():
+        return {"process": pname, "status": "skipped_shutting_down"}
     if manager.running():
-        manager.desired_running = True
+        manager.set_desired_running(True)
         return {"process": pname, "status": "already_running"}
-    env = manager.last_env or _restore_process_runtime_env(pname)
+    env = manager.get_last_env() or _restore_process_runtime_env(pname)
     if not env:
         msg = f"{pname} sin entorno persistido para autoarranque"
         _webapp_log(f"[AUTO_START] {msg}")
@@ -3686,8 +3803,8 @@ def _attempt_auto_start_process(process_name: str, manager: ProcessManager) -> d
 def _auto_start_processes_once() -> list[dict]:
     cfg = _auto_start_settings_snapshot()
     delay = int(cfg.get("delay_sec") or 0)
-    if delay > 0:
-        time.sleep(delay)
+    if delay > 0 and shutdown_event.wait(delay):
+        return []
     results: list[dict] = []
     if bool(cfg.get("lector_enabled")):
         results.append(_attempt_auto_start_process(PROCESS_NAME_LECTOR, lector_manager))
@@ -3803,6 +3920,8 @@ def _perform_controlled_restart(target: str, reason: str = "manual") -> dict:
     if t not in RESTART_TARGETS:
         raise HTTPException(status_code=400, detail="target inválido: operador|lector|both")
     with restart_lock:
+        if shutdown_event.is_set():
+            return {"status": "skipped", "target": t, "reason": reason, "skipped": ["app_shutting_down"]}
         queue_stats = _queue_pending_stats()
         # Regla conservadora: no reiniciar programáticamente cuando hay backlog.
         if reason == "scheduled" and int(queue_stats["count"]) > 0:
@@ -3820,28 +3939,40 @@ def _perform_controlled_restart(target: str, reason: str = "manual") -> dict:
 
         actions: list[str] = []
         errors: list[str] = []
+        skipped: list[str] = []
+        auto_start_cfg = _auto_start_settings_snapshot() if reason == "scheduled" else {}
         if t in ("operador", "both"):
-            try:
-                if not operador_manager.last_env:
-                    operador_manager.last_env = _restore_process_runtime_env(PROCESS_NAME_OPERADOR)
-                if not operador_manager.last_env:
-                    raise RuntimeError("OPERADOR sin configuración previa para reiniciar")
-                operador_manager.restart()
-                actions.append("operador_restarted")
-            except Exception as exc:
-                errors.append(f"operador: {exc}")
+            if reason == "scheduled" and not bool(auto_start_cfg.get("operador_enabled")):
+                skipped.append("operador_auto_start_disabled")
+            else:
+                try:
+                    operador_env = operador_manager.get_last_env()
+                    if not operador_env:
+                        operador_env = _restore_process_runtime_env(PROCESS_NAME_OPERADOR)
+                        operador_manager.set_last_env(operador_env)
+                    if not operador_env:
+                        raise RuntimeError("OPERADOR sin configuración previa para reiniciar")
+                    operador_manager.restart()
+                    actions.append("operador_restarted")
+                except Exception as exc:
+                    errors.append(f"operador: {exc}")
         if t in ("lector", "both"):
-            try:
-                if not lector_manager.last_env:
-                    lector_manager.last_env = _restore_process_runtime_env(PROCESS_NAME_LECTOR)
-                if not lector_manager.last_env:
-                    raise RuntimeError("LECTOR sin configuración previa para reiniciar")
-                lector_manager.restart()
-                actions.append("lector_restarted")
-            except Exception as exc:
-                errors.append(f"lector: {exc}")
+            if reason == "scheduled" and not bool(auto_start_cfg.get("lector_enabled")):
+                skipped.append("lector_auto_start_disabled")
+            else:
+                try:
+                    lector_env = lector_manager.get_last_env()
+                    if not lector_env:
+                        lector_env = _restore_process_runtime_env(PROCESS_NAME_LECTOR)
+                        lector_manager.set_last_env(lector_env)
+                    if not lector_env:
+                        raise RuntimeError("LECTOR sin configuración previa para reiniciar")
+                    lector_manager.restart()
+                    actions.append("lector_restarted")
+                except Exception as exc:
+                    errors.append(f"lector: {exc}")
 
-        status = "ok" if not errors else ("partial" if actions else "error")
+        status = ("partial" if actions else "error") if errors else ("ok" if actions else "skipped")
         if status == "ok":
             _upsert_alert(
                 source="scheduler",
@@ -3852,7 +3983,7 @@ def _perform_controlled_restart(target: str, reason: str = "manual") -> dict:
                 data={"target": t, "reason": reason, "queue": queue_stats},
             )
             _resolve_alert_code("RESTART_POSTPONED_QUEUE")
-        else:
+        elif status != "skipped":
             _upsert_alert(
                 source="scheduler",
                 code="RESTART_ERROR",
@@ -3861,12 +3992,15 @@ def _perform_controlled_restart(target: str, reason: str = "manual") -> dict:
                 details="; ".join(errors),
                 data={"target": t, "reason": reason, "actions": actions},
             )
+        else:
+            _webapp_log(f"[RESTART] omitido target={t} reason={reason} skipped={skipped}")
         return {
             "status": status,
             "target": t,
             "reason": reason,
             "actions": actions,
             "errors": errors,
+            "skipped": skipped,
             "queue": queue_stats,
         }
 
@@ -3903,13 +4037,23 @@ def _run_crash_watchdog_once(snap: dict) -> None:
     window_sec = max(cooldown, int(snap.get("crash_window_sec") or 300))
 
     for pname, manager, target in _crash_watchdog_specs():
-        up = manager.running()
-        wanted = bool(getattr(manager, "desired_running", False))
+        process_state = manager.state_snapshot()
+        up = bool(process_state["running"])
+        wanted = bool(process_state["desired_running"])
 
-        if up or not wanted:
+        if not wanted:
             _clear_crash_watchdog_state(pname)
             _resolve_alert_code(f"CRASH_RESTART_FAILED_{pname.upper()}")
             _resolve_alert_code(f"CRASH_RESTART_LOOP_{pname.upper()}")
+            continue
+        if up:
+            # A child that survives only a few watchdog ticks may still be in a
+            # crash loop. Require one complete crash window of uptime before
+            # forgetting its restart attempts.
+            _resolve_alert_code(f"CRASH_RESTART_FAILED_{pname.upper()}")
+            if float(process_state.get("uptime_sec") or 0.0) >= float(window_sec):
+                _clear_crash_watchdog_state(pname)
+                _resolve_alert_code(f"CRASH_RESTART_LOOP_{pname.upper()}")
             continue
 
         with crash_watchdog_lock:
@@ -3940,16 +4084,14 @@ def _run_crash_watchdog_once(snap: dict) -> None:
         status = str(result.get("status") or "")
         if status == "ok":
             _resolve_alert_code(f"CRASH_RESTART_FAILED_{pname.upper()}")
-            _resolve_alert_code(f"CRASH_RESTART_LOOP_{pname.upper()}")
             _upsert_alert(
                 source="watchdog",
                 code=f"CRASH_RESTARTED_{pname.upper()}",
                 severity="warning",
                 title=f"Reinicio automático por crash ({pname.upper()})",
                 details=f"{pname} cayó y fue reiniciado automáticamente.",
-                data={"process": pname, "last_exit": manager.last_exit, "reason": "crash_watchdog"},
+                data={"process": pname, "last_exit": manager.state_snapshot()["last_exit"], "reason": "crash_watchdog"},
             )
-            _clear_crash_watchdog_state(pname)
         else:
             _upsert_alert(
                 source="watchdog",
@@ -3962,7 +4104,7 @@ def _run_crash_watchdog_once(snap: dict) -> None:
 
 
 def _restart_worker_loop():
-    while True:
+    while not shutdown_event.is_set():
         try:
             snap = _restart_settings_snapshot()
             _run_crash_watchdog_once(snap)
@@ -3972,9 +4114,9 @@ def _restart_worker_loop():
                     result = _perform_controlled_restart(snap["target"], reason="scheduled")
                     if result.get("status") != "postponed":
                         _schedule_next_restart()
-            time.sleep(1.0)
+            shutdown_event.wait(1.0)
         except Exception:
-            time.sleep(2.0)
+            shutdown_event.wait(2.0)
 
 
 def _upsert_alert(*, source: str, code: str, severity: str, title: str, details: str, data: dict | None = None) -> int:
@@ -4226,23 +4368,38 @@ def _evaluate_alerts_once():
         details=f"oldest_age_sec={queue_stats['oldest_age_sec']} threshold={cfg['alerts_queue_oldest_sec']}",
         data=queue_stats,
     )
+    lector_state = lector_manager.state_snapshot()
+    operador_state = operador_manager.state_snapshot()
+    auto_start_state = _auto_start_settings_snapshot()
+    lector_expected = bool(lector_state["desired_running"]) or bool(auto_start_state["lector_enabled"])
+    operador_expected = bool(operador_state["desired_running"]) or bool(auto_start_state["operador_enabled"])
     _alert_check_or_resolve(
-        not lector_manager.running(),
+        lector_expected and not bool(lector_state["running"]),
         source="runtime",
         code="LECTOR_OFFLINE",
         severity="warning",
         title="Lector offline",
-        details=f"Lector no está ejecutándose (last_exit={lector_manager.last_exit})",
-        data={"last_exit": lector_manager.last_exit},
+        details=f"Lector no está ejecutándose (last_exit={lector_state['last_exit']})",
+        data={
+            "last_exit": lector_state["last_exit"],
+            "exited_at": lector_state["exited_at"],
+            "desired_running": lector_state["desired_running"],
+            "auto_start": auto_start_state["lector_enabled"],
+        },
     )
     _alert_check_or_resolve(
-        not operador_manager.running(),
+        operador_expected and not bool(operador_state["running"]),
         source="runtime",
         code="OPERADOR_OFFLINE",
         severity="critical",
         title="Operador offline",
-        details=f"Operador no está ejecutándose (last_exit={operador_manager.last_exit})",
-        data={"last_exit": operador_manager.last_exit},
+        details=f"Operador no está ejecutándose (last_exit={operador_state['last_exit']})",
+        data={
+            "last_exit": operador_state["last_exit"],
+            "exited_at": operador_state["exited_at"],
+            "desired_running": operador_state["desired_running"],
+            "auto_start": auto_start_state["operador_enabled"],
+        },
     )
     now = datetime.now(URUGUAY_TZ)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
@@ -4353,7 +4510,7 @@ def _evaluate_alerts_once():
 
 
 def _alerts_worker_loop():
-    while True:
+    while not shutdown_event.is_set():
         try:
             cfg = _alerts_settings_snapshot()
             # Guardia de almacenamiento siempre activa, aunque las alertas operativas estén deshabilitadas.
@@ -4361,9 +4518,9 @@ def _alerts_worker_loop():
             if cfg["alerts_enabled"]:
                 _evaluate_alerts_once()
                 _dispatch_pending_discord_alerts()
-            time.sleep(max(5, int(cfg["alerts_check_interval_sec"])))
+            shutdown_event.wait(max(5, int(cfg["alerts_check_interval_sec"])))
         except Exception:
-            time.sleep(5.0)
+            shutdown_event.wait(5.0)
 
 
 def _alerts_active_items() -> list[dict]:
@@ -4639,7 +4796,7 @@ def _run_retention_once() -> dict:
 
 
 def _retention_worker_loop():
-    while True:
+    while not shutdown_event.is_set():
         try:
             cfg = _retention_settings_snapshot()
             if cfg["enabled"]:
@@ -4651,9 +4808,9 @@ def _retention_worker_loop():
                     due = elapsed >= (int(cfg["interval_min"]) * 60)
                 if due:
                     _run_retention_once()
-            time.sleep(30)
+            shutdown_event.wait(30)
         except Exception:
-            time.sleep(30)
+            shutdown_event.wait(30)
 
 
 def _backup_settings_snapshot() -> dict:
@@ -4665,6 +4822,7 @@ def _backup_settings_snapshot() -> dict:
         "enabled": _setting_get_bool(raw, "backup_enabled", True),
         "interval_hours": max(1, _setting_get_int(raw, "backup_interval_hours", 24)),
         "keep_days": max(1, _setting_get_int(raw, "backup_keep_days", 14)),
+        "retry_delay_sec": int(BACKUP_RETRY_DELAY_SEC),
         "last_run_at": str(raw.get("backup_last_run_at", "") or "").strip(),
         "last_status": last_status,
         "last_path": last_path,
@@ -4681,6 +4839,8 @@ def _backup_due(cfg: dict) -> bool:
         return True
     now_dt = datetime.now(URUGUAY_TZ).replace(tzinfo=None)
     elapsed = (now_dt - last_dt).total_seconds()
+    if str(cfg.get("last_status") or "").strip().lower() == "error":
+        return elapsed >= int(BACKUP_RETRY_DELAY_SEC)
     return elapsed >= (int(cfg.get("interval_hours") or 24) * 3600)
 
 
@@ -4703,6 +4863,89 @@ def _zip_add_path(zf: zipfile.ZipFile, src: Path, arc_prefix: str = "") -> int:
     return count
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _append_zip_sha256_manifest(zip_path: Path) -> dict:
+    entries: list[dict[str, object]] = []
+    with zipfile.ZipFile(str(zip_path), "r") as zf:
+        for info in sorted(zf.infolist(), key=lambda item: item.filename):
+            if info.is_dir():
+                continue
+            digest = hashlib.sha256()
+            with zf.open(info, "r") as src:
+                for chunk in iter(lambda: src.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            entries.append(
+                {
+                    "path": info.filename,
+                    "size": int(info.file_size),
+                    "sha256": digest.hexdigest(),
+                }
+            )
+    manifest = {
+        "algorithm": "sha256",
+        "created_at": _utc_now_iso(),
+        "scope": "all archive files except metadata/sha256_manifest.json",
+        "entries": entries,
+    }
+    manifest_bytes = json.dumps(manifest, ensure_ascii=True, indent=2).encode("utf-8")
+    with zipfile.ZipFile(str(zip_path), "a", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        zf.writestr("metadata/sha256_manifest.json", manifest_bytes)
+    return manifest
+
+
+def _verify_backup_zip(zip_path: Path) -> dict:
+    with zipfile.ZipFile(str(zip_path), "r") as zf:
+        bad_member = zf.testzip()
+        if bad_member is not None:
+            raise RuntimeError(f"ZIP corrupto; primera entrada inválida: {bad_member}")
+        try:
+            manifest = json.loads(zf.read("metadata/sha256_manifest.json").decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"No se pudo leer el manifiesto SHA-256: {exc}") from exc
+        entries = manifest.get("entries") if isinstance(manifest, dict) else None
+        if not isinstance(entries, list):
+            raise RuntimeError("Manifiesto SHA-256 inválido: falta entries")
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise RuntimeError("Manifiesto SHA-256 inválido: entrada no válida")
+            member_name = str(entry.get("path") or "")
+            expected_size = int(entry.get("size") or 0)
+            expected_sha = str(entry.get("sha256") or "").strip().lower()
+            try:
+                info = zf.getinfo(member_name)
+            except KeyError as exc:
+                raise RuntimeError(f"Entrada declarada ausente del ZIP: {member_name}") from exc
+            if int(info.file_size) != expected_size:
+                raise RuntimeError(f"Tamaño inválido en ZIP: {member_name}")
+            digest = hashlib.sha256()
+            with zf.open(info, "r") as src:
+                for chunk in iter(lambda: src.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if not hmac.compare_digest(digest.hexdigest(), expected_sha):
+                raise RuntimeError(f"SHA-256 inválido en ZIP: {member_name}")
+    return manifest
+
+
+def _verify_sqlite_snapshot(snapshot_path: Path) -> None:
+    conn = sqlite3.connect(str(snapshot_path), timeout=30.0)
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        rows = conn.execute("PRAGMA quick_check").fetchall()
+    finally:
+        conn.close()
+    results = [str(row[0] or "").strip().lower() for row in rows]
+    if results != ["ok"]:
+        details = "; ".join(results[:10]) or "sin resultado"
+        raise RuntimeError(f"SQLite quick_check falló en el snapshot: {details}")
+
+
 def _write_sqlite_backup(dst_path: Path) -> bool:
     if not DB_PATH.exists():
         return False
@@ -4714,12 +4957,13 @@ def _write_sqlite_backup(dst_path: Path) -> bool:
         dst = sqlite3.connect(str(dst_path), timeout=30.0)
         src.backup(dst)
         dst.commit()
-        return True
     finally:
         if dst is not None:
             dst.close()
         if src is not None:
             src.close()
+    _verify_sqlite_snapshot(dst_path)
+    return True
 
 
 def _prune_old_backups(keep_days: int) -> int:
@@ -4732,6 +4976,7 @@ def _prune_old_backups(keep_days: int) -> int:
             try:
                 if path.stat().st_mtime < cutoff:
                     path.unlink()
+                    Path(str(path) + ".sha256").unlink(missing_ok=True)
                     deleted += 1
             except Exception:
                 continue
@@ -4746,10 +4991,14 @@ def _run_backup_once(reason: str = "manual") -> dict:
         return {"status": "disabled", "path": ""}
     with backup_lock:
         BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(URUGUAY_TZ).strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.now(URUGUAY_TZ).strftime("%Y%m%d_%H%M%S_%f")
         tmp_dir = BACKUPS_DIR / f".tmp_{stamp}"
         tmp_zip = BACKUPS_DIR / f"trading_bot_backup_{stamp}.zip.tmp"
         final_zip = BACKUPS_DIR / f"trading_bot_backup_{stamp}.zip"
+        tmp_sha256 = BACKUPS_DIR / f".trading_bot_backup_{stamp}.zip.sha256.tmp"
+        final_sha256 = Path(str(final_zip) + ".sha256")
+        sidecar_published = False
+        archive_published = False
         copied = 0
         db_snapshot = tmp_dir / "config" / "trading_bot.db"
         try:
@@ -4761,6 +5010,7 @@ def _run_backup_once(reason: str = "manual") -> dict:
                 "db_path": str(DB_PATH),
                 "root_dir": str(ROOT_DIR),
                 "db_snapshot": bool(db_ok),
+                "db_quick_check": "ok" if db_ok else "not_applicable",
             }
             metadata_path = tmp_dir / "backup_metadata.json"
             metadata_path.write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -4776,17 +5026,31 @@ def _run_backup_once(reason: str = "manual") -> dict:
                 copied += _zip_add_path(zf, QUEUE_PENDING_DIR, "queue/pending")
                 failed_dir = QUEUE_DIR / "failed"
                 copied += _zip_add_path(zf, failed_dir, "queue/failed")
+            _append_zip_sha256_manifest(tmp_zip)
+            copied += 1
+            _verify_backup_zip(tmp_zip)
+            archive_sha256 = _sha256_file(tmp_zip)
+            tmp_sha256.write_text(f"{archive_sha256}  {final_zip.name}\n", encoding="ascii")
+            # Publish the checksum first and the archive last. Observers will
+            # never see a final ZIP before all integrity checks have succeeded.
+            os.replace(str(tmp_sha256), str(final_sha256))
+            sidecar_published = True
             os.replace(str(tmp_zip), str(final_zip))
+            archive_published = True
             deleted = _prune_old_backups(int(cfg.get("keep_days") or 14))
             _setting_set("backup_last_run_at", _utc_now_iso())
             _setting_set("backup_last_status", "ok")
             _setting_set("backup_last_path", str(final_zip))
             _setting_set("backup_last_error", "")
             _resolve_alert_code("BACKUP_FAILED")
-            _webapp_log(f"[BACKUP] ok path={final_zip} files={copied} pruned={deleted}")
+            _webapp_log(
+                f"[BACKUP] ok path={final_zip} files={copied} sha256={archive_sha256} pruned={deleted}"
+            )
             return {
                 "status": "ok",
                 "path": str(final_zip),
+                "sha256": archive_sha256,
+                "sha256_path": str(final_sha256),
                 "files": int(copied),
                 "pruned": int(deleted),
             }
@@ -4794,6 +5058,10 @@ def _run_backup_once(reason: str = "manual") -> dict:
             try:
                 if tmp_zip.exists():
                     tmp_zip.unlink(missing_ok=True)
+                if tmp_sha256.exists():
+                    tmp_sha256.unlink(missing_ok=True)
+                if sidecar_published and not archive_published:
+                    final_sha256.unlink(missing_ok=True)
             except Exception:
                 pass
             err = str(exc)
@@ -4806,10 +5074,19 @@ def _run_backup_once(reason: str = "manual") -> dict:
                 severity="critical",
                 title="Fallo backup local",
                 details=err,
-                data={"reason": reason, "dir": str(BACKUPS_DIR)},
+                data={
+                    "reason": reason,
+                    "dir": str(BACKUPS_DIR),
+                    "retry_delay_sec": int(BACKUP_RETRY_DELAY_SEC),
+                },
             )
-            _webapp_log(f"[BACKUP] error {err}")
-            return {"status": "error", "path": "", "error": err}
+            _webapp_log(f"[BACKUP] error {err}; retry_in_sec={BACKUP_RETRY_DELAY_SEC}")
+            return {
+                "status": "error",
+                "path": "",
+                "error": err,
+                "retry_in_sec": int(BACKUP_RETRY_DELAY_SEC),
+            }
         finally:
             try:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -4818,15 +5095,15 @@ def _run_backup_once(reason: str = "manual") -> dict:
 
 
 def _backup_worker_loop():
-    while True:
+    while not shutdown_event.is_set():
         try:
             cfg = _backup_settings_snapshot()
             if _backup_due(cfg):
                 _run_backup_once(reason="scheduled")
-            time.sleep(60)
+            shutdown_event.wait(30)
         except Exception as exc:
             _webapp_log(f"[BACKUP] worker error {exc}")
-            time.sleep(60)
+            shutdown_event.wait(30)
 
 
 def _start_background_workers_once() -> None:
@@ -4839,6 +5116,16 @@ def _start_background_workers_once() -> None:
     threading.Thread(target=_retention_worker_loop, daemon=True, name="retention-worker").start()
     threading.Thread(target=_backup_worker_loop, daemon=True, name="backup-worker").start()
     threading.Thread(target=_autostart_worker_loop, daemon=True, name="autostart-worker").start()
+
+
+@app.on_event("shutdown")
+def _shutdown_managed_children() -> None:
+    shutdown_event.set()
+    _webapp_log("[WEBAPP] shutdown requested; stopping managed children")
+    # Stop execution before ingestion so no new signal is accepted while the
+    # operator is being taken offline. Persisted auto-start flags are untouched.
+    operador_manager.shutdown(timeout_sec=10.0)
+    lector_manager.shutdown(timeout_sec=10.0)
 
 
 def _merge_health_status(current: str, candidate: str) -> str:
@@ -4897,6 +5184,7 @@ def _health_snapshot() -> dict:
         "enabled": bool(backup_cfg["enabled"]),
         "interval_hours": int(backup_cfg["interval_hours"]),
         "keep_days": int(backup_cfg["keep_days"]),
+        "retry_delay_sec": int(backup_cfg["retry_delay_sec"]),
         "last_run_at": str(backup_cfg["last_run_at"] or ""),
         "last_status": str(backup_cfg["last_status"] or ""),
         "last_path": str(backup_cfg["last_path"] or ""),
@@ -4916,14 +5204,10 @@ def _health_snapshot() -> dict:
 
     runtime: dict[str, dict] = {}
     for pname, manager, _target in _crash_watchdog_specs():
-        running = bool(manager.running())
-        wanted = bool(getattr(manager, "desired_running", False))
-        runtime[pname] = {
-            "running": running,
-            "desired_running": wanted,
-            "last_exit": manager.last_exit,
-            "pid": manager.proc.pid if manager.proc else None,
-        }
+        process_state = manager.state_snapshot()
+        running = bool(process_state["running"])
+        wanted = bool(process_state["desired_running"])
+        runtime[pname] = dict(process_state)
         if wanted and not running:
             status = _merge_health_status(status, "error")
             errors.append(f"{pname}_down_unexpected")
@@ -4949,7 +5233,7 @@ def _health_snapshot() -> dict:
 async def require_web_auth_session(request: Request, call_next):
     # Salud local mínima sin auth estricta para facilitar diagnosis local.
     path = str(request.url.path or "")
-    if path == "/healthz":
+    if path in ("/livez", "/healthz"):
         return await call_next(request)
     if request.method == "OPTIONS":
         return await call_next(request)
@@ -5014,7 +5298,7 @@ def _runtime_24x7_snapshot() -> dict:
         },
         "external_watchdog": {
             "script": str(ROOT_DIR / "scripts" / "register_webapp_watchdog_task.ps1"),
-            "health_url": "http://127.0.0.1:8000/healthz",
+            "health_url": "http://127.0.0.1:8000/livez",
         },
     }
 
@@ -5092,6 +5376,11 @@ def healthz():
     return JSONResponse(snap, status_code=http_code)
 
 
+@app.get("/livez", include_in_schema=False)
+def livez():
+    return JSONResponse({"status": "ok"})
+
+
 @app.get("/api/health/24x7")
 def health_24x7():
     return JSONResponse(_runtime_24x7_snapshot())
@@ -5118,6 +5407,20 @@ def status():
     queue_stats = _queue_pending_stats()
     storage_stats = _project_storage_snapshot()
     health = _health_snapshot()
+    lector_state = lector_manager.state_snapshot()
+    operador_state = operador_manager.state_snapshot()
+    operador_env = operador_manager.get_last_env() or {}
+    try:
+        operator_entry_ttl = max(30, int(str(operador_env.get("ENTRY_EVENT_TTL_SEC", "300") or "300")))
+    except Exception:
+        operator_entry_ttl = 300
+    operador_state["safety"] = {
+        "execution_armed": str(operador_env.get("TRADING_BOT_EXECUTION_ARMED", "false")).strip().lower()
+        in ("1", "true", "yes", "on"),
+        "require_demo_account": str(operador_env.get("TRADING_BOT_REQUIRE_DEMO_ACCOUNT", "true")).strip().lower()
+        in ("1", "true", "yes", "on"),
+        "entry_event_ttl_sec": operator_entry_ttl,
+    }
     with _db_conn() as conn:
         open_ops = int(
             conn.execute(
@@ -5151,18 +5454,8 @@ def status():
                 "messages": msgs,
                 "alerts_active": alerts_active,
             },
-            "lector": {
-                "running": lector_manager.running(),
-                "pid": lector_manager.proc.pid if lector_manager.proc else None,
-                "last_exit": lector_manager.last_exit,
-                "desired_running": lector_manager.desired_running,
-            },
-            "operador": {
-                "running": operador_manager.running(),
-                "pid": operador_manager.proc.pid if operador_manager.proc else None,
-                "last_exit": operador_manager.last_exit,
-                "desired_running": operador_manager.desired_running,
-            },
+            "lector": dict(lector_state),
+            "operador": dict(operador_state),
         }
     )
 
@@ -6369,6 +6662,7 @@ def start_operador(payload: OperadorStartRequest):
     near_entry_spread_mult = float(payload.near_entry_spread_mult if payload.near_entry_spread_mult is not None else op_defaults.get("near_entry_spread_mult", 2.0))
     verify_after_send = bool(payload.verify_order_after_send) if payload.verify_order_after_send is not None else bool(op_defaults.get("verify_order_after_send", True))
     auto_close_mismatch = bool(payload.auto_close_on_mismatch) if payload.auto_close_on_mismatch is not None else bool(op_defaults.get("auto_close_on_mismatch", False))
+    execution_armed = bool(payload.execution_armed)
     if not terminal_path:
         raise HTTPException(status_code=400, detail="MT5_TERMINAL_PATH es obligatorio")
     if int(mt5_login) <= 0:
@@ -6399,6 +6693,11 @@ def start_operador(payload: OperadorStartRequest):
     env["NEAR_ENTRY_SPREAD_MULT"] = str(near_entry_spread_mult)
     env["VERIFY_ORDER_AFTER_SEND"] = "true" if verify_after_send else "false"
     env["AUTO_CLOSE_ON_MISMATCH"] = "true" if auto_close_mismatch else "false"
+    # The dashboard deliberately supports demo-only automation. Moving to a
+    # live account requires an explicit server-side change, not a casual click.
+    env["TRADING_BOT_EXECUTION_ARMED"] = "true" if execution_armed else "false"
+    env["TRADING_BOT_REQUIRE_DEMO_ACCOUNT"] = "true"
+    env["ENTRY_EVENT_TTL_SEC"] = "300"
     env["TRADING_BOT_DB_PATH"] = str(DB_PATH)
 
     try:
@@ -6408,7 +6707,14 @@ def start_operador(payload: OperadorStartRequest):
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return {"status": "started"}
+    return {
+        "status": "started",
+        "safety": {
+            "execution_armed": execution_armed,
+            "require_demo_account": True,
+            "entry_event_ttl_sec": 300,
+        },
+    }
 
 
 @app.post("/api/stop/operador")

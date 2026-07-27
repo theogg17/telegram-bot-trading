@@ -5,6 +5,7 @@ __pycache__/
 
 # Runtime/data
 queue/
+runtime/
 Lector/data/
 Operador/*.csv
 config/trading_bot.db

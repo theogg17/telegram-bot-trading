@@ -15,13 +15,26 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Root "queue\failed") | Out
 
 if (-not (Test-Path (Join-Path $Root ".venv\Scripts\python.exe"))) {
   & $PythonCommand -m venv .venv
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to create .venv with '$PythonCommand' (exit=$LASTEXITCODE)."
+  }
 }
 
 $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
 
 if (-not $SkipInstall) {
   & $VenvPython -m pip install --upgrade pip
+  if ($LASTEXITCODE -ne 0) {
+    throw "pip upgrade failed (exit=$LASTEXITCODE)."
+  }
   & $VenvPython -m pip install -r requirements.txt
+  if ($LASTEXITCODE -ne 0) {
+    throw "dependency installation failed (exit=$LASTEXITCODE)."
+  }
+  & $VenvPython -m pip check
+  if ($LASTEXITCODE -ne 0) {
+    throw "pip check failed (exit=$LASTEXITCODE)."
+  }
 }
 
 Write-Host "Server setup complete."

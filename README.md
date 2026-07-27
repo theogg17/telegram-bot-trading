@@ -61,9 +61,11 @@ Ejemplo PowerShell:
 
 ```powershell
 $env:TRADING_BOT_WEB_USER="admin"
-$env:TRADING_BOT_WEB_PASSWORD="admin"
+$env:TRADING_BOT_WEB_PASSWORD="<PASSWORD_UNICA_DE_24_O_MAS_CARACTERES>"
 python webapp\app.py
 ```
+
+No uses `admin/admin` ni reutilices una contraseña. En el despliegue normal se recomienda dejar que la aplicación genere una credencial aleatoria en `config/web_auth.json` y guardarla en un gestor de contraseñas.
 
 2) Abrir `http://127.0.0.1:8000`
 
@@ -172,6 +174,13 @@ python Operador\verificador_apertura.py --once
 
 ## Seguridad operacional del Operador
 
+- Barreras de ejecución MT5 (fail-closed):
+  - `TRADING_BOT_EXECUTION_ARMED=false` por defecto bloquea toda escritura en MT5; las vías virtuales siguen funcionando.
+  - `TRADING_BOT_REQUIRE_DEMO_ACCOUNT=true` por defecto impide iniciar con una cuenta no-demo.
+  - `ENTRY_EVENT_TTL_SEC=300` impide abrir entradas antiguas acumuladas en la cola.
+  - El dashboard fuerza la política demo y exige marcar/confirmar el armado en cada nueva configuración inicial.
+- Lector, Operador y verificador usan locks de instancia única para evitar procesos duplicados.
+
 - `VERIFY_ORDER_AFTER_SEND`:
   - Si esta en `true`, despues de enviar una orden el bot valida que exista en MT5 (por `comment`) con reintentos cortos.
   - Si no la encuentra, registra error `not_found_after_send` en `Operador/errores_de_aperturas.csv`.
@@ -242,6 +251,13 @@ python Operador\verificador_apertura.py --once
 
 ## Robustez 24/7 (nuevo)
 
+- Supervisión Windows:
+  - `/livez` separa liveness de la salud operativa detallada de `/healthz`.
+  - `TradingBotWebApp` no tiene límite de ejecución, reinicia ante fallo y rechaza instancias duplicadas.
+  - el watchdog externo requiere dos fallos consecutivos, aplica cooldown y recupera la WebApp con `stop -> start`.
+  - el mismo watchdog comprueba MT5 cada minuto y arranca su tarea si el terminal desaparece.
+  - `scripts/check_server_24x7.ps1` valida tareas, loopback, procesos duplicados, MT5, Tailscale y backups.
+
 - SQLite:
   - conexiones con `WAL`, `busy_timeout` y `timeout` para reducir `database is locked`.
 - MT5:
@@ -272,6 +288,10 @@ python Operador\verificador_apertura.py --once
   - modo `cerrar en MT5` (encola evento `panel_close` para que lo ejecute el Operador).
 - Retención 24/7:
   - worker de retención con archivo JSON en SQLite (`retention_archive`) y purga por antigüedad configurable.
+- Backups:
+  - snapshot SQLite validado con `quick_check`.
+  - CRC ZIP, manifiesto SHA-256 y sidecar `.sha256` antes de publicar el backup.
+  - reintento corto tras error y retención local acotada al ejecutar con el script de producción.
 
 ## Seguridad
 
