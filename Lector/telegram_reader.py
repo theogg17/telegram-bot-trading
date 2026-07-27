@@ -2,6 +2,7 @@
 
 import os
 import asyncio
+import sys
 from telethon.sync import TelegramClient, events
 from message_parser_chatgpt import parse_signal_chatgpt as parse_signal
 from db_writer import save_trade, save_non_signal, update_trade, read_signals, fetch_reply_context
@@ -10,6 +11,9 @@ import pytz
 import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(BASE_DIR)
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 SESSION_PATH = os.path.join(BASE_DIR, "session_name")
 
 client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
@@ -185,4 +189,11 @@ def run():
     client.run_until_disconnected()
 
 if __name__ == '__main__':
-    run()
+    from common.single_instance import AlreadyRunningError, single_instance
+
+    try:
+        with single_instance("lector"):
+            run()
+    except AlreadyRunningError as exc:
+        print(f"[INSTANCE] Lector no iniciado: {exc}", file=sys.stderr)
+        raise SystemExit(73) from None

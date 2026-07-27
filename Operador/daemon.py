@@ -20,6 +20,8 @@ from config_operador import (
     EVENTS_QUEUE_DIR, EVENTS_QUEUE_PROCESSED_DIR,
     OPERACIONES_ABIERTAS_CSV, ERRORES_APERTURAS_CSV,
     VERIFY_ORDER_AFTER_SEND, AUTO_CLOSE_ON_MISMATCH,
+    TRADING_BOT_EXECUTION_ARMED, TRADING_BOT_REQUIRE_DEMO_ACCOUNT,
+    ENTRY_EVENT_TTL_SEC,
 )
 
 BASE_DIR = os.path.dirname(__file__)
@@ -27,6 +29,13 @@ ROOT_DIR = os.path.dirname(BASE_DIR)
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 from common.csv_guard import atomic_write_dataframe_csv, csv_file_lock
+from common.execution_safety import (
+    ExecutionSafetyError,
+    ensure_execution_allowed,
+    evaluate_entry_freshness,
+    validate_account_policy,
+)
+from common.single_instance import AlreadyRunningError, single_instance
 TRADING_BOT_DB_PATH = os.getenv("TRADING_BOT_DB_PATH", os.path.join(ROOT_DIR, "config", "trading_bot.db"))
 QUEUE_FAILED_DIR = os.path.join(ROOT_DIR, "queue", "failed")
 QUEUE_MAX_RETRIES = max(1, int(os.getenv("QUEUE_MAX_RETRIES", "5")))
@@ -1829,6 +1838,39 @@ def _bootstrap_operation_records():
         pass
 
 # =============== MT5 & helpers ===============
+def _demo_trade_mode() -> int:
+    return int(getattr(mt5, "ACCOUNT_TRADE_MODE_DEMO", 0))
+
+
+def _validate_mt5_account_policy():
+    validate_account_policy(
+        mt5.account_info(),
+        require_demo=bool(TRADING_BOT_REQUIRE_DEMO_ACCOUNT),
+        demo_trade_mode=_demo_trade_mode(),
+    )
+
+
+def _assert_mt5_write_allowed():
+    ensure_execution_allowed(
+        armed=bool(TRADING_BOT_EXECUTION_ARMED),
+        account_info=mt5.account_info(),
+        require_demo=bool(TRADING_BOT_REQUIRE_DEMO_ACCOUNT),
+        demo_trade_mode=_demo_trade_mode(),
+    )
+
+
+def _mt5_order_send(request):
+    """Last-line fail-closed boundary for every MT5 write in this daemon."""
+    _assert_mt5_write_allowed()
+    return mt5.order_send(request)
+
+
+def _mt5_order_delete(ticket):
+    """Guard legacy pending-order deletion with the same execution policy."""
+    _assert_mt5_write_allowed()
+    return mt5.order_delete(ticket)
+
+
 def mt5_init():
     try:
         mt5.shutdown()
@@ -1874,6 +1916,11 @@ def mt5_init():
     time.sleep(0.5)
     if not mt5.login(login=login, password=password, server=server):
         raise RuntimeError(f"MT5 login failed: {mt5.last_error()}")
+    try:
+        _validate_mt5_account_policy()
+    except ExecutionSafetyError:
+        mt5.shutdown()
+        raise
 
     if SYMBOLS_ALWAYS_SELECT:
         for s in SYMBOLS_ALWAYS_SELECT:
@@ -1886,7 +1933,10 @@ def mt5_init():
 
 def _mt5_connection_alive() -> bool:
     try:
-        return mt5.terminal_info() is not None and mt5.account_info() is not None
+        if mt5.terminal_info() is None or mt5.account_info() is None:
+            return False
+        _validate_mt5_account_policy()
+        return True
     except Exception:
         return False
 
@@ -2080,7 +2130,7 @@ def _send_with_fallback(build_request, build_args, symbol: str):
     last = None
     for mode in _candidate_fillings(symbol):
         req = build_request(*build_args, filling=mode)
-        result = mt5.order_send(req)
+        result = _mt5_order_send(req)
         if result is None:
             last = None
             continue
@@ -2847,7 +2897,7 @@ def modify_position_sl(comments, new_sl, new_tp=None, tickets=None):
                 "magic": int(MAGIC_NUMBER),
                 "comment": f"{p.comment}|MOD_SL",
             }
-            r = mt5.order_send(req)
+            r = _mt5_order_send(req)
             _track_mt5_result(r)
             if r is None:
                 ok = False
@@ -2880,7 +2930,7 @@ def modify_position_sl(comments, new_sl, new_tp=None, tickets=None):
             "magic": int(MAGIC_NUMBER),
             "comment": f"{o.comment}|MOD_PENDING",
         }
-        r = mt5.order_send(req)
+        r = _mt5_order_send(req)
         _track_mt5_result(r)
         if r is None:
             ok = False
@@ -2936,7 +2986,7 @@ def close_positions(comments, tickets=None):
         return False, "no positions matched", details
 
     for o in target_orders:
-        r = mt5.order_delete(o.ticket)
+        r = _mt5_order_delete(o.ticket)
         if isinstance(r, bool):
             if not r:
                 ok = False
@@ -3799,7 +3849,42 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
                     )
                     continue
 
-                if op_mode == "real":
+                if op_mode == "real" and not TRADING_BOT_EXECUTION_ARMED:
+                    safety_details = (
+                        f"operation_id={op_id};TRADING_BOT_EXECUTION_ARMED=false; "
+                        "no MT5 close was sent"
+                    )
+                    _report_log(
+                        event_id=event_id,
+                        message_id=message_id,
+                        channel_id=int(op["channel_id"]) if op["channel_id"] is not None else None,
+                        channel_name=op_channel_name,
+                        config_id=int(op["preset_id"]) if op["preset_id"] is not None else None,
+                        config_name=str(op["preset_name"] or ""),
+                        mode=op_mode,
+                        event_type="close",
+                        symbol=op_symbol,
+                        side=op_side,
+                        operator_class=op_profile,
+                        entry_message_id=op_entry_message_id,
+                        reply_to=reply_to,
+                        status="SKIP",
+                        error_type="execution_not_armed",
+                        details=safety_details,
+                    )
+                    _operation_event_add(
+                        conn,
+                        op_id,
+                        event_type="close",
+                        event_id=event_id,
+                        message_id=message_id,
+                        reply_to=reply_to,
+                        status="SKIP",
+                        error_type="execution_not_armed",
+                        details=safety_details,
+                    )
+                    conn.commit()
+                elif op_mode == "real":
                     tickets = _uniq_int_tickets([op["ticket"]])
                     comments = _uniq_text([op["comment"]])
                     lookup_method = "operation_ticket_comment"
@@ -3983,8 +4068,26 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
             entry_retry_error = ""
             entry_permanent_error = ""
             execute_real_entry = True
+            real_skip_reason = ""
+            real_skip_details = ""
+            freshness = evaluate_entry_freshness(
+                r.get("timestamp", ""),
+                ttl_seconds=ENTRY_EVENT_TTL_SEC,
+                now=datetime.datetime.now(URUGUAY_TZ),
+            )
             if assignments and real_assignment is None:
                 execute_real_entry = False
+                real_skip_reason = "no_real_assignment"
+                real_skip_details = "Hay asignaciones activas pero ninguna en modo real para este canal"
+            elif not TRADING_BOT_EXECUTION_ARMED:
+                execute_real_entry = False
+                real_skip_reason = "execution_not_armed"
+                real_skip_details = "TRADING_BOT_EXECUTION_ARMED=false; no MT5 order was sent"
+            elif not freshness.allowed:
+                execute_real_entry = False
+                real_skip_reason = freshness.reason
+                age_text = "unknown" if freshness.age_seconds is None else f"{freshness.age_seconds:.1f}"
+                real_skip_details = f"entry_age_sec={age_text};ttl_sec={ENTRY_EVENT_TTL_SEC}; no MT5 order was sent"
 
             run_profile = _normalize_profile_code(real_assignment["execution_profile"] if real_assignment else EXECUTION_PROFILE)
             run_total_volume = real_assignment["total_volume"] if real_assignment else TOTAL_VOLUME
@@ -4199,7 +4302,7 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
                     event_id=event_id,
                     message_id=message_id,
                     channel_name=channel,
-                    config_name="unassigned_real",
+                    config_name="execution_blocked" if real_skip_reason != "no_real_assignment" else "unassigned_real",
                     mode="real",
                     event_type="entry",
                     symbol=symbol,
@@ -4208,8 +4311,8 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
                     entry_message_id=message_id,
                     reply_to=reply_to,
                     status="SKIP",
-                    error_type="no_real_assignment",
-                    details="Hay asignaciones activas pero ninguna en modo real para este canal",
+                    error_type=real_skip_reason or "real_execution_blocked",
+                    details=real_skip_details or "Real execution blocked by safety policy",
                 )
 
             # carteras virtuales (shadow)
@@ -4349,7 +4452,42 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
             requested_class = op_class if op_class in KNOWN_PROFILE_CODES else ""
             class_match = requested_class in ("", expected_style)
 
-            if not class_match:
+            if not TRADING_BOT_EXECUTION_ARMED:
+                safety_details = "TRADING_BOT_EXECUTION_ARMED=false; no MT5 modification was sent"
+                _report_log(
+                    event_id=event_id,
+                    message_id=message_id,
+                    channel_id=real_assignment["channel_id"] if real_assignment else None,
+                    channel_name=channel,
+                    config_id=real_assignment["config_id"] if real_assignment else None,
+                    config_name=real_assignment["config_name"] if real_assignment else "runtime_default",
+                    mode="real",
+                    event_type="modification",
+                    symbol=symbol,
+                    side=side,
+                    operator_class=op_class,
+                    entry_message_id=entry_id,
+                    reply_to=reply_to,
+                    status="SKIP",
+                    error_type="execution_not_armed",
+                    details=safety_details,
+                )
+                with _db_conn() as conn:
+                    op_id = _operation_id_real(conn, channel_index, entry_id, expected_style)
+                    if op_id:
+                        _operation_event_add(
+                            conn,
+                            op_id,
+                            event_type="modification",
+                            event_id=event_id,
+                            message_id=message_id,
+                            reply_to=reply_to,
+                            status="SKIP",
+                            error_type="execution_not_armed",
+                            details=safety_details,
+                        )
+                        conn.commit()
+            elif not class_match:
                 _report_log(
                     event_id=event_id,
                     message_id=message_id,
@@ -4644,7 +4782,43 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
             class_match = requested_class in ("", expected_style)
             any_ok = True
             infos = []
-            if not class_match:
+            if not TRADING_BOT_EXECUTION_ARMED:
+                safety_details = "TRADING_BOT_EXECUTION_ARMED=false; no MT5 close was sent"
+                infos.append("execution_not_armed")
+                _report_log(
+                    event_id=event_id,
+                    message_id=message_id,
+                    channel_id=real_assignment["channel_id"] if real_assignment else None,
+                    channel_name=channel,
+                    config_id=real_assignment["config_id"] if real_assignment else None,
+                    config_name=real_assignment["config_name"] if real_assignment else "runtime_default",
+                    mode="real",
+                    event_type="close",
+                    symbol=symbol,
+                    side=side,
+                    operator_class=op_class,
+                    entry_message_id=entry_id,
+                    reply_to=reply_to,
+                    status="SKIP",
+                    error_type="execution_not_armed",
+                    details=safety_details,
+                )
+                with _db_conn() as conn:
+                    op_id = _operation_id_real(conn, channel_index, entry_id, expected_style)
+                    if op_id:
+                        _operation_event_add(
+                            conn,
+                            op_id,
+                            event_type="close",
+                            event_id=event_id,
+                            message_id=message_id,
+                            reply_to=reply_to,
+                            status="SKIP",
+                            error_type="execution_not_armed",
+                            details=safety_details,
+                        )
+                        conn.commit()
+            elif not class_match:
                 _report_log(
                     event_id=event_id,
                     message_id=message_id,
@@ -4999,6 +5173,12 @@ def process_events_df(df: pd.DataFrame, source="signals_csv"):
 # =============== LOOP PRINCIPAL ===============
 def run_loop(poll_seconds=2):
     global _startup_reconcile_done
+    print(
+        "[SAFETY] "
+        f"mt5_writes={'ARMED' if TRADING_BOT_EXECUTION_ARMED else 'DISARMED'} "
+        f"require_demo={bool(TRADING_BOT_REQUIRE_DEMO_ACCOUNT)} "
+        f"entry_ttl_sec={ENTRY_EVENT_TTL_SEC}"
+    )
     _ensure_experiment_tables()
     _migrate_processed_events_csv_to_db()
     try:
@@ -5101,5 +5281,10 @@ def run_loop(poll_seconds=2):
             time.sleep(poll_seconds)
 
 if __name__ == "__main__":
-    run_loop()
+    try:
+        with single_instance("operador"):
+            run_loop()
+    except AlreadyRunningError as exc:
+        print(f"[INSTANCE] Operador no iniciado: {exc}", file=sys.stderr)
+        raise SystemExit(73) from None
 

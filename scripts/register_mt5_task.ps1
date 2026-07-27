@@ -1,14 +1,13 @@
 param(
-  [string]$TaskName = "TradingBotWebApp",
+  [string]$TaskName = "TradingBotMT5",
+  [string]$TerminalPath = "C:\Program Files\MetaTrader 5\terminal64.exe",
   [switch]$RunNow
 )
 
 $ErrorActionPreference = "Stop"
-$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
-$StartScript = Join-Path $Root "scripts\start_webapp.ps1"
 
-if (-not (Test-Path -LiteralPath $StartScript -PathType Leaf)) {
-  throw "Missing start script: $StartScript"
+if (-not (Test-Path -LiteralPath $TerminalPath -PathType Leaf)) {
+  throw "MetaTrader terminal not found: $TerminalPath"
 }
 
 $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -19,37 +18,37 @@ if (-not $PrincipalObject.IsInRole($AdminRole)) {
 }
 
 $UserId = $Identity.Name
-$Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$StartScript`""
-$Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $Arguments -WorkingDirectory ([string]$Root)
+$Action = New-ScheduledTaskAction `
+  -Execute $TerminalPath `
+  -WorkingDirectory (Split-Path -Parent $TerminalPath)
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
 $Settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
   -DontStopIfGoingOnBatteries `
   -StartWhenAvailable `
-  -RestartCount 20 `
+  -RestartCount 10 `
   -RestartInterval (New-TimeSpan -Minutes 1) `
   -ExecutionTimeLimit ([TimeSpan]::Zero) `
   -MultipleInstances IgnoreNew
-
-# Keep the public-facing WebApp out of an elevated token. The watchdog is the
-# small privileged component that can stop/start this task when it is hung.
 $Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Limited
 $Definition = New-ScheduledTask `
   -Action $Action `
   -Trigger $Trigger `
   -Settings $Settings `
   -Principal $Principal `
-  -Description "Trading Bot WebApp; long-running task with automatic recovery. Requires this Windows user session for MT5 child processes."
+  -Description "XM/MetaTrader 5 terminal for TradingBot. Runs in the interactive Windows session."
 
 Register-ScheduledTask -TaskName $TaskName -InputObject $Definition -Force | Out-Null
-
 if ($RunNow) {
-  Start-ScheduledTask -TaskName $TaskName
+  if (Get-Process -Name "terminal64" -ErrorAction SilentlyContinue) {
+    Write-Host "MetaTrader is already running; no second instance was started."
+  } else {
+    Start-ScheduledTask -TaskName $TaskName
+  }
 }
 
 $Registered = Get-ScheduledTask -TaskName $TaskName
 $Info = Get-ScheduledTaskInfo -TaskName $TaskName
-Write-Host "Registered task '$TaskName' for '$UserId'."
+Write-Host "Registered MT5 task '$TaskName' for '$UserId'."
 Write-Host "State=$($Registered.State) LastResult=$($Info.LastTaskResult)"
-Write-Host "ExecutionTimeLimit=unlimited, RestartCount=20, RestartInterval=1 minute, RunLevel=Limited."
-Write-Host "It starts at logon and continues after RDP is disconnected. After a Windows reboot, this user must log on before MT5 automation can run."
+Write-Host "It starts at logon and keeps running after RDP is disconnected."

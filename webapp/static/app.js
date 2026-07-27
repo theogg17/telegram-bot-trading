@@ -237,6 +237,10 @@ async function refreshStatus() {
     }
     if (!data.operador?.running && data.operador?.last_exit != null && data.operador.last_exit !== 0) {
       operadorMsg.textContent = `Operador offline (exit=${data.operador.last_exit}). Ver logs.`;
+    } else if (data.operador?.running) {
+      operadorMsg.textContent = data.operador?.safety?.execution_armed
+        ? "Operador online · DEMO ARMADO"
+        : "Operador online · DESARMADO (solo virtual)";
     }
     if (typeof window.applyGlobalHeaderStatus === "function") {
       window.applyGlobalHeaderStatus(data);
@@ -564,12 +568,19 @@ async function startOperador() {
     mt5_login: Number(document.getElementById("mt5_login").value),
     mt5_password: document.getElementById("mt5_password").value,
     mt5_server: document.getElementById("mt5_server").value.trim(),
+    execution_armed: !!document.getElementById("execution_armed").checked,
   };
   if (!payload.mt5_terminal_path || !Number.isFinite(payload.mt5_login) || payload.mt5_login <= 0 || !payload.mt5_password || !payload.mt5_server) {
     operadorMsg.textContent = "Completa terminal path, login, password y server";
     return;
   }
-  operadorMsg.textContent = "Iniciando...";
+  if (payload.execution_armed && !window.confirm("Vas a habilitar envíos a MT5. Continúa solo si la cuenta conectada es DEMO. ¿Confirmas?")) {
+    operadorMsg.textContent = "Inicio cancelado; el Operador continúa detenido";
+    return;
+  }
+  operadorMsg.textContent = payload.execution_armed
+    ? "Iniciando ARMADO en cuenta demo..."
+    : "Iniciando DESARMADO (solo virtual)...";
   const res = await fetch("/api/start/operador", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -584,7 +595,7 @@ async function startOperador() {
     return;
   }
   operadorMsg.textContent = statusData.operador?.running
-    ? "Operador online"
+    ? (statusData.operador?.safety?.execution_armed ? "Operador online · DEMO ARMADO" : "Operador online · DESARMADO (solo virtual)")
     : `Operador se cerró${statusData.operador?.last_exit != null ? ` (exit=${statusData.operador.last_exit})` : ""}. Ver logs.`;
 }
 

@@ -130,7 +130,12 @@
               MT5 Server
               <input id="mt5_server" type="text" placeholder="Broker-Server" autocomplete="off" required />
             </label>
+            <label class="checkbox">
+              <input id="execution_armed" type="checkbox" />
+              Armar envío de órdenes a MT5 (solo cuenta demo)
+            </label>
           </form>
+          <p class="hint-inline">Desmarcado: el Operador puede procesar carteras virtuales, pero bloquea aperturas, modificaciones y cierres en MT5.</p>
           <div class="actions">
             <button class="btn primary" id="start-operador" type="button">Iniciar Operador</button>
             <button class="btn ghost" id="stop-operador" type="button">Detener</button>

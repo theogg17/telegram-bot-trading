@@ -84,6 +84,15 @@ MT5_PORTABLE    = False
 # =========================
 # Modo de ejecución real: siempre una sola orden por señal.
 EXECUTION_MODE = "single"
+
+# Conservative barriers for every MT5 write. Virtual portfolios remain active,
+# but opening/modifying/closing MT5 orders requires an explicit arm switch.
+TRADING_BOT_EXECUTION_ARMED = _get_env_bool("TRADING_BOT_EXECUTION_ARMED", False)
+TRADING_BOT_REQUIRE_DEMO_ACCOUNT = _get_env_bool("TRADING_BOT_REQUIRE_DEMO_ACCOUNT", True)
+
+# Prevent queued entries from opening late after a restart. Missing or invalid
+# entry timestamps also fail closed for MT5 writes while virtual paths continue.
+ENTRY_EVENT_TTL_SEC = max(30, _get_env_cast("ENTRY_EVENT_TTL_SEC", 300, int))
 if str(os.getenv("EXECUTION_MODE", "single")).strip().lower() not in ("", "single"):
     print("[CFG] EXECUTION_MODE distinto de 'single' ignorado: el operador usa una orden por señal.")
 
